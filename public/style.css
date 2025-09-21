@@ -565,3 +565,180 @@ html,body{
   pointer-events:none;
   background: url('/assets/Icons/Wall.png') center / 68% no-repeat;
 }
+
+/* Control Points HUD */
+#controlScoreBox{ position:absolute; top:10px; left:50%; transform:translateX(-50%); padding:8px 12px; z-index:55; }
+#controlScoreBox .label{ font-weight:900; margin-bottom:4px; }
+#controlScoreBox .score{ font-size:18px; letter-spacing:1px; }
+.ghost.control{ background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-blue) 55%, transparent), transparent); border:3px solid var(--ghost-blue); opacity:1; z-index:42; pointer-events:none; }
+#controlFlag{ position:absolute; transform:translate(-50%,-60%); z-index:43; pointer-events:none; }
+#controlFlagSVG{ width:48px; height:64px; display:block; filter: drop-shadow(0 3px 6px rgba(0,0,0,.55)); }
+
+/* === Control Points HUD: bigger & shifted left === */
+#controlScoreBox{
+  top: 34px;
+  left: calc(50% - 400px);
+  transform: none;
+  padding: 18px 22px;
+}
+#controlScoreBox .label{ font-size: 18px; }
+#controlScoreBox .score{ font-size: 36px; letter-spacing: 1.75px; }
+
+
+/* Top-center series (round wins) scoreboard */
+#seriesScoreTop{
+  position:absolute;
+  top:4px;
+  left:50%;
+  transform:translateX(-50%);
+  padding:6px 12px;
+  border-radius:12px;
+  background: rgba(0,0,0,.35);
+  border:1px solid var(--panel-border);
+  font-weight:900;
+  font-size:22px;
+  z-index:60;
+  pointer-events:none;
+}
+#seriesScoreTop span{ display:inline-block; min-width:24px; text-align:center; }
+
+
+/* === Stack Y over X (display-only) ===
+   Y = #seriesScoreTop  (best-of-5)
+   X = #controlScoreBox (round tally to 10)
+   No element removal, server unchanged. */
+#seriesScoreTop{
+  position: absolute !important;
+  left: 16px !important;
+  top: 10px !important;
+  transform: none !important;
+  z-index: 100 !important;
+}
+#controlScoreBox{
+  position: absolute !important;
+  left: 16px !important;
+  top: 56px !important;   /* directly under Y */
+  transform: none !important;
+  z-index: 99 !important;
+}
+
+
+/* === Move stacked score boxes into the empty space right of the left panel === */
+#seriesScoreTop{
+  position:absolute !important;
+  left: calc(8px + 460px + 16px) !important; /* panel left + width + gap */
+  top: 10px !important;
+  transform: none !important;
+  z-index: 100 !important;
+}
+#controlScoreBox{
+  position:absolute !important;
+  left: calc(8px + 460px + 16px) !important; /* align with Y */
+  top: 64px !important;                      /* directly beneath Y */
+  transform: none !important;
+  z-index: 99 !important;
+}
+
+
+/* Top series score label/score layout */
+#seriesScoreTop .label{ font-size:12px; text-align:center; opacity:.85; padding:4px 8px 0; }
+#seriesScoreTop .score{ font-weight:900; font-size:22px; text-align:center; padding:4px 10px 8px; }
+
+
+/* === Size & spacing for stacked score boxes (no overlap) === */
+:root{
+  --scoreStackLeft: calc(8px + 460px + 16px); /* left panel left + width + gap */
+  --seriesBoxTop: 10px;
+  --seriesBoxHeight: 88px; /* height of top box Y */
+}
+
+#seriesScoreTop{
+  position:absolute !important;
+  left: var(--scoreStackLeft) !important;
+  top: var(--seriesBoxTop) !important;
+  min-width: 170px;
+  height: var(--seriesBoxHeight);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  padding: 6px 14px;
+  z-index: 100 !important;
+}
+#seriesScoreTop .label{ font-size:13px; text-align:center; opacity:.9; }
+#seriesScoreTop .score{ font-weight:900; font-size:26px; line-height:1; }
+
+#controlScoreBox{
+  position:absolute !important;
+  left: var(--scoreStackLeft) !important;
+  top: calc(var(--seriesBoxTop) + var(--seriesBoxHeight) + 10px) !important; /* sit below Y with gap */
+  min-width: 120px;
+  padding: 4px 10px;
+  z-index: 99 !important;
+}
+#controlScoreBox .score{ font-size:18px; line-height:1; }
+
+
+/* === Bigger numbers in both score boxes === */
+#seriesScoreTop .score{ font-size: 32px !important; line-height: 1.05; }
+#controlScoreBox .score{ font-size: 24px !important; line-height: 1.05; }
+
+
+/* Center the bottom (round tally) box text */
+#controlScoreBox{
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+#controlScoreBox .score{
+  width: 100% !important;
+  text-align: center !important;
+}
+
+
+/* ===== Adjust score boxes: move down & center bottom under top ===== */
+:root{
+  --seriesBoxTop: 20px;          /* was 10px -> move both boxes down a bit */
+  --seriesBoxWidth: 200px;       /* explicit width for top box */
+  --controlBoxWidth: 140px;      /* explicit width for bottom box */
+  --scoreGap: 14px;              /* vertical gap between boxes */
+}
+
+#seriesScoreTop{
+  width: var(--seriesBoxWidth) !important;
+  top: var(--seriesBoxTop) !important;
+}
+
+#controlScoreBox{
+  width: var(--controlBoxWidth) !important;
+  top: calc(var(--seriesBoxTop) + var(--seriesBoxHeight) + var(--scoreGap)) !important;
+  left: calc(var(--scoreStackLeft) + (var(--seriesBoxWidth) - var(--controlBoxWidth)) / 2) !important; /* center under top */
+}
+
+/* --- Turn icon badges on character cards --- */
+.charCard { position: relative; }
+.charCard .turnIcons{
+  position:absolute;
+  top:6px;
+  right:6px;
+  display:flex;
+  gap:6px;
+  pointer-events:none; /* purely indicative */
+}
+.charCard .turnIcons .icon{
+  width:20px; height:20px; line-height:20px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:14px;
+  background:rgba(0,0,0,.35);
+  border-radius:50%;
+  color:#fff;
+  text-shadow:0 1px 2px #000;
+}
+
+
+/* texture atlas hook for tiles */
+#board .tile{
+  background-repeat: no-repeat;
+  background-size: var(--atlas-w, auto) var(--atlas-h, auto);
+  background-position: var(--atlas-x, 0) var(--atlas-y, 0);
+  image-rendering: auto;
+}
+
+.cbtn.active{ outline:2px solid #ff4343; filter:brightness(1.08); }

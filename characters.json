@@ -14,7 +14,8 @@
       "name": "Trickster Special",
       "type": "none",
       "cost": 0
-    }
+    },
+    "movement": 2
   },
   {
     "id": "aimbot",
@@ -56,7 +57,7 @@
     }
   },
   {
-    "id": "deathblossom",
+    "id": "death_blossom",
     "name": "Death Blossom",
     "class": "support",
     "hpMax": 10,
@@ -130,6 +131,31 @@
       "type": "transform",
       "cost": 5,
       "duration": 3
+    }
+  },
+  {
+    "id": "don_atore",
+    "name": "Don Atore",
+    "class": "support",
+    "hpMax": 12,
+    "energyMax": 6,
+    "movement": 2,
+    "primary": {
+      "name": "Blood Donation",
+      "type": "heal",
+      "amount": 3,
+      "range": 1,
+      "cost": 0
+    },
+    "special": {
+      "name": "Replenish",
+      "type": "selfHeal",
+      "amount": 5,
+      "cost": 5
+    },
+    "passive": {
+      "name": "Vital Flow",
+      "desc": "Regenerate 2 HP at the end of each round."
     }
   }
 ]

@@ -103,6 +103,8 @@ const HEROES = {
   death_blossom: { id:'death_blossom', name:'Death Blossom', archetype:'Support' },
   dungeon_master: { id:'dungeon_master', name:'Dungeon Master', archetype:'DPS' },
   little_bear: { id:'little_bear', name:'Little Bear', archetype:'Tank' },
+
+  don_atore: { id:'don_atore', name:'Don Atore', archetype:'Support' },
 };
 
 
@@ -118,14 +120,24 @@ const CARD_COST = {
   Wall: 1,
   Shatter: 1,
   Swap: 4,
-  FMJ: 6,
+  FMJ: 3,
   VoodooDoll: 3,
   PolarAttraction: 4,
-  HealingPetal: 4,
-  Transform: 5
-};
+  HealingPetal: 3,
+  Transform: 5,
+  Replenish: 5,};
 const ENERGY_MAX = 10;
 const ENERGY_GAIN_PER_TURN = 1;
+
+
+
+function energyGainForRound(round){
+  if (round == null) round = 1;
+  if (round <= 2) return 1;   // Rounds 1–2
+  if (round <= 5) return 2;   // Rounds 3–5
+  if (round <= 8) return 3;   // Rounds 6–8
+  return 4;                   // Round 9+
+}
 
 function ensureEnergy(st){
   if (!st.energy) st.energy = { player1:0, player2:0 };
@@ -145,13 +157,14 @@ function pay(st, seat, type){
   return true;
 }
 function initialTurnState() {
-  return { cardPlayed:false, usedMovement:false, usedAction:false, moveBuff:{ stepsBonus:0, minSteps:0 } };
+  return { cardPlayed:false, usedMovement:false, usedAction:false, moveBuff:{ stepsBonus:0, minSteps:0 }, moved:{}, acted:{} };
 }
 
 function createRoomState(roomId) {
   const ENERGY_INIT = { player1:0, player2:0 };
   const hexR = 58, hexH = 2*hexR, vSpace = 0.75 * hexH;
-  const state = {
+  const state = { mode: 'standard', control: null,
+
     roomId,
     // seating & meta
     players: [],       // [{socketId, seat:'player1'|'player2'|'spectator', name, heroes:[ids]}]
@@ -183,9 +196,9 @@ function createRoomState(roomId) {
     // class defs
     CHAR_DEFS: {
       Tank:    { maxHP: 18, primary:{ name:'Shield Bash',  type:'damage', dmg:3, range:1 }, special:{ name:'Hammer Slam', type:'damage', dmg:5, range:1, cd:3 } },
-      DPS1:    { maxHP: 8 , primary:{ name:'Fire Bolt',    type:'damage', dmg:3, range:2 }, special:{ name:'Dragon’s Fury', type:'damage', dmg:4, range:2, cd:4 } },
+      DPS1:    { maxHP: 12, primary:{ name:'Fire Bolt',    type:'damage', dmg:3, range:2 }, special:{ name:'Dragon’s Fury', type:'damage', dmg:4, range:2, cd:4 } },
       DPS2:    { maxHP: 11, primary:{ name:'Dagger Thrust',type:'damage', dmg:3, range:1 }, special:{ name:'Sneak Attack', type:'damage', dmg:5, range:1, cd:3, cond:'movedThisTurn' } },
-      Support: { maxHP: 10, primary:{ name:'Mend',         type:'heal',   heal:2, range:2 }, special:{ name:'Healing Bloom', type:'heal', heal:4, range:2, cd:3 } }
+      Support: { maxHP: 13, primary:{ name:'Mend',         type:'heal',   heal:2, range:2 }, special:{ name:'Healing Bloom', type:'heal', heal:4, range:2, cd:3 } }
     }
 ,
 
@@ -243,8 +256,81 @@ function createRoomState(roomId) {
   addTok('E4','player2','A4','Support','Support');
 
   rooms.set(roomId, state);
+  function initControlPoints(st){
+    try{
+      const ids = Object.keys(st.tilePositions||{});
+      if (!ids.length) return;
+      const eligible = ids.filter(id => (st.adjacency[id]||[]).length >= 3);
+      const seedStr = String(st.roomId||'seed');
+      let h=0; for (let i=0;i<seedStr.length;i++){ h = (h*31 + seedStr.charCodeAt(i))|0; }
+          const pick = (st.tilePositions && st.tilePositions.E1) ? 'E1' : (eligible[0] || ids[0]);
+      const nbs = (st.adjacency[pick]||[]).slice();
+      nbs.sort((a,b)=>{
+        const pa = st.tilePositions[a], pb = st.tilePositions[b];
+        const da = Math.hypot(pa.x - st.centerX, pa.y - st.centerY);
+        const db = Math.hypot(pb.x - st.centerX, pb.y - st.centerY);
+        return da - db;
+      });
+      st.control = { anchor: pick, tiles: Array.from(new Set(nbs)).slice(0,3), scores:{ player1:0, player2:0 } };
+    }catch(e){ st.control = { anchor:null, tiles:[], scores:{player1:0,player2:0} }; }
+  }
+  function scoreControlRound(st){
+  if (!st || st.mode!=='control' || !st.control) return;
+  let p1=0, p2=0;
+  const tileSet = new Set(st.control.tiles||[]);
+  const anchor = st.control.anchor || null;
+  for (const [id, tok] of st.tokens){
+    if (!tok || !tok.tile) continue;
+    if (anchor && tok.tile === anchor){
+      if (tok.owner==='player1') p1 += 2;
+      else if (tok.owner==='player2') p2 += 2;
+    } else if (tileSet.has(tok.tile)){
+      if (tok.owner==='player1') p1++;
+      else if (tok.owner==='player2') p2++;
+    }
+  }
+  st.control.scores.player1 = (st.control.scores.player1||0) + p1;
+  st.control.scores.player2 = (st.control.scores.player2||0) + p2;
+  let winner = null;
+  if (st.control.scores.player1 >= 10) winner = 'player1';
+  if (st.control.scores.player2 >= 10) winner = 'player2';
+  if (winner){ st.gameEnded = true; io.to(st.roomId).emit('gameOver', { winner }); }
+}
+
   return state;
 }
+
+
+
+// Minimal helper: adjust spawn tiles for Control mode only (characters only)
+function applyControlModeSpawns(st){
+  try{
+    if (!st || st.mode !== 'control') return;
+    const have = (t)=> st.tilePositions && st.tilePositions[t];
+    const set  = (id,t)=>{ if (have(t) && st.tokens && st.tokens.has(id)) st.tokens.get(id).tile = t; };
+
+    // Player 1 — bottom-right corner cluster (facing left)
+    set('P1','H4'); // Tank (front)
+    set('P2','I4'); // DPS (side)
+    set('P3','H5'); // DPS (side)
+    set('P4','I3'); // Support (back)
+
+    // Player 2 — top-right corner cluster (facing left)
+    set('E1','B4'); // Tank (front)
+    set('E2','A4'); // DPS (side)
+    set('E3','B5'); // DPS (side)
+    set('E4','A3'); // Support (back)
+  }catch(_){ /* no-op */ }
+
+    // Record fixed respawn tiles for this mode
+    if (!st.respawnAt) st.respawnAt = {};
+    st.respawnAt.P1 = 'H4'; st.respawnAt.P2 = 'I4'; st.respawnAt.P3 = 'H5'; st.respawnAt.P4 = 'I3';
+    st.respawnAt.E1 = 'B4'; st.respawnAt.E2 = 'A4'; st.respawnAt.E3 = 'B5'; st.respawnAt.E4 = 'A3';
+    if (!st.pendingRespawn) st.pendingRespawn = { player1: [], player2: [] };
+
+  }
+
+
 
 /* --- Per-hero overrides (server) --- */
 function getCharDef(st, ch){
@@ -269,7 +355,7 @@ function getCharDef(st, ch){
       special: { name: 'Swap', type: 'swap', range: 99, energyCost: 4, cd: 0 }
     },
     Aimbot: {
-      maxHP: 8,
+      maxHP: 12,
       primary: { name: 'True Shot', type: 'damage', dmg: 5, range: 3, cd: 0 },
       special: { name: 'FMJ', type: 'fmj', range: 4, energyCost: 6, dmg: 5, cd: 0 }
     },
@@ -284,11 +370,21 @@ function getCharDef(st, ch){
       special: { name: 'Polar Attraction', type: 'polar', range: 2, energyCost: 4, cd: 0 }
     },
     Aimbot: {
-      maxHP: 8,
+      maxHP: 12,
       primary: { name: 'True Shot', type: 'damage', dmg: 5, range: 3, cd: 0 },
       special: { name: 'FMJ', type: 'fmj', range: 4, energyCost: 6, dmg: 5, cd: 0 }
     }
-  };
+  
+,
+"Don Atore": {
+  maxHP: 12,
+  special: { name: 'Replenish', type: 'selfHeal', heal: 5, energyCost: 5, cd: 0 
+,
+primary: { name: 'Blood Donation', type: 'tapHeal', range: 1, cd: 0 }
+
+}
+}
+};
   const ov = (ch && ch.name) ? HERO_OVERRIDES[ch.name] : null;
   if (!ov) return base;
   return {
@@ -306,6 +402,28 @@ function neighbors(state, id) { return state.adjacency[id] ?? []; }
 function wallsSet(state) { return new Set([...state.walls.keys()]); }
 function occMap(state) { const m = new Map(); state.tokens.forEach((st)=> m.set(st.tile, true)); return m; }
 
+
+// Find an open tile near a preferred spawn tile (BFS up to radius 3)
+function findOpenTileNear(state, preferred){
+  const occ = occMap(state), walls = wallsSet(state);
+  if (preferred && state.tilePositions[preferred] && !occ.has(preferred) && !walls.has(preferred)) return preferred;
+  if (!preferred || !state.tilePositions[preferred]) return preferred;
+  const seen = new Set([preferred]);
+  let frontier = [preferred];
+  for (let depth=0; depth<3; depth++){
+    const next = [];
+    for (const cur of frontier){
+      for (const n of neighbors(state, cur)){
+        if (seen.has(n)) continue; seen.add(n);
+        if (!occ.has(n) && !walls.has(n)) return n;
+        next.push(n);
+      }
+    }
+    frontier = next;
+  }
+  // fallback: even if occupied, return the preferred to avoid undefined
+  return preferred;
+}
 function shortestDistance(state, start, goal, blockedSet) {
   if (start === goal) return 0;
   const seen = new Set([start]); const q = [[start, 0]];
@@ -489,6 +607,24 @@ function resetPerTurn(st, role){ st.turnState[role] = initialTurnState(); }
 
     // Tick down statuses for the side beginning its turn and apply DoT ticks.
     function processStartOfTurn(st, seat){
+  // Ensure per-turn flags are fresh for the seat starting its turn
+  resetPerTurn(st, seat);
+
+      // Handle Control-mode pending respawns for this seat
+      if (st.mode === 'control' && st.pendingRespawn && Array.isArray(st.pendingRespawn[seat]) && st.pendingRespawn[seat].length){
+        const toBring = st.pendingRespawn[seat].splice(0);
+        for (const id of toBring){
+          const ch = st.chars.get(id); if (!ch) continue;
+          const base = getCharDef(st, ch) || { maxHP: ch.hp || 10 };
+          const pref = (typeof __CN_pickRespawn==='function' ? __CN_pickRespawn(st, id) : ((typeof __cn_getRespawnTileDynamic==='function' ? __cn_getRespawnTileDynamic(st, id) : null) || (st.respawnAt ? st.respawnAt[id] : null)));
+          const tile = (typeof __CN_findOpenTileSameRowNear==='function' ? __CN_findOpenTileSameRowNear(st, pref) : findOpenTileNear(st, pref));
+          ch.fx = {}; ch.dead = false;
+          ch.hp = base.maxHP || ch.hp || 10;
+          st.tokens.set(id, { owner: ch.owner, tile, hasMovedEver:false, role: ch.role, name: ch.name });
+          io.to(st.roomId).emit('respawn', { id, tile, owner: ch.owner });
+        }
+      }
+
       for (const [id, ch] of st.chars){
         const tok = st.tokens.get(id);
         if (!tok || tok.owner !== seat) continue;
@@ -583,10 +719,17 @@ function endTurnTo(st, next){
   const prev = st.currentTurn;
   /* [ENERGY] add to the player who just ended their turn */
   ensureEnergy(st);
-  st.energy[prev] = Math.min(ENERGY_MAX, (st.energy[prev]||0) + ENERGY_GAIN_PER_TURN);
-  tickWalls(st);
+  const __energGain = energyGainForRound(st.round);
+  st.energy[prev] = Math.min(ENERGY_MAX, (st.energy[prev]||0) + __energGain);
+tickWalls(st);
   healBlossomAtEnd(st, prev);
-  // Healing Petals (tileAuras.blossoms): heal & tick only on OWNER's end turn
+  if (st.mode === 'control' && prev === 'player2') { scoreControlRound(st); }
+
+  
+  // Advance the round counter after both players have taken a turn
+  if (st.round == null) st.round = 1;
+  if (prev === 'player2') st.round += 1;
+// Healing Petals (tileAuras.blossoms): heal & tick only on OWNER's end turn
   if (st.tileAuras && Array.isArray(st.tileAuras.blossoms)){
     const nextBlossoms = [];
     for (const b of st.tileAuras.blossoms){
@@ -616,6 +759,17 @@ function endTurnTo(st, next){
   }
   tickBlossomWalls(st, prev);
   tickBlossomPinkWalls(st, prev);
+  // Don Atore passive — heal +1 at the end of OWNER's turn
+  try {
+    for (const [id, ch] of st.chars){
+      const tok = st.tokens.get(id);
+      if (!tok || tok.owner !== prev) continue;
+      if ((ch && ch.name) === 'Don Atore' && !ch.dead){
+        applyHeal(st, id, 1);
+      }
+    }
+  } catch(_){ /* ignore */ }
+
   for (const [id, c] of st.chars){
     const tok = st.tokens.get(id);
     if (tok && tok.owner === prev && c.cds.special > 0) c.cds.special -= 1;
@@ -733,10 +887,22 @@ if (c.hp <= 0 && String(c.name||'').toLowerCase() === 'dungeon master'){
     return; // skip death handling
   }
 }
-  if (c.hp <= 0){
-    c.dead = true;
+  
+if (c.hp <= 0){
+    c.fx = {}; c.dead = true;
     if (st.tokens.has(targetId)) st.tokens.delete(targetId);
     io.to(st.roomId).emit('unitDied', { id: targetId });
+    // Queue respawn at original spawn at the start of owner's next turn (Control mode only)
+    try{
+      if (st.mode === 'control'){
+        if (!st.pendingRespawn) st.pendingRespawn = { player1: [], player2: [] };
+        const seat = c.owner || (st.tokens.get(targetId)?.owner);
+        if (seat && st.pendingRespawn[seat]){
+          // avoid duplicates
+          if (!st.pendingRespawn[seat].includes(targetId)) st.pendingRespawn[seat].push(targetId);
+        }
+      }
+    }catch(_){}
     checkGameOver(st);
   }
 }
@@ -776,7 +942,7 @@ function checkGameOver(st){
 
 function sendFullState(roomId, toSocket=null){
   const st = rooms.get(roomId); if (!st) return;
-  const payload = {
+  const payload = { mode: st.mode || 'standard', control: st.control ? { anchor: st.control.anchor, tiles:[...(st.control.tiles||[])], scores:{...(st.control.scores||{player1:0,player2:0})}, tally:{...(st.control.tally||{player1:0,player2:0})}, progress:{...(st.control.progress||{player1:0,player2:0})}, round:(typeof st.control.round==='number'?st.control.round:1) } : null, 
     blocked: exportWalls(st),
     blossomBlocked: exportBlossomWalls(st),
     blossomPinkBlocked: exportBlossomPinkWalls(st),
@@ -859,7 +1025,7 @@ io.on('connection', (socket) => {
 
   /* ---------- GAME JOIN (index.html) ---------- */
   // payload: { room, name, heroes:[ids] }
-  socket.on('game:join', ({ room, name, heroes })=>{
+  socket.on('game:join', ({ room, name, heroes, mode })=>{
     if (!room) return;
 
     // Create/fetch room state
@@ -869,9 +1035,16 @@ io.on('connection', (socket) => {
     // Join socket.io room
     socket.join(room);
 
+    // Set mode and initialize Control Points if requested
+    const chosen = (mode === 'control') ? 'control' : 'standard';
+    if (!st.mode || st.mode !== chosen){ st.mode = chosen; if (st.mode === 'control' && !st.control) initControlPoints(st); }
+applyControlModeSpawns(st);
+
+
+
     // Upsert provisional player
     const existingIdx = st.players.findIndex(p => p.socketId === socket.id);
-    const provisional = { socketId: socket.id, seat:'spectator', name: (name||'').trim() || 'Player', heroes: Array.isArray(heroes) ? heroes : [] };
+    const provisional = { socketId: socket.id, seat:'spectator', name: (name?.trim() || 'Player'), heroes: Array.isArray(heroes) ? heroes : [] };
     if (existingIdx >= 0) st.players[existingIdx] = { ...st.players[existingIdx], ...provisional };
     else st.players.push(provisional);
 
@@ -1018,11 +1191,14 @@ sendFullState(st.roomId);
     if (occ.has(toTile)) { io.to(socket.id).emit('invalidMove', { id }); return; }
 
     const ts = st.turnState[mySeat];
+    if (ts.moved && ts.moved[id]) { io.to(socket.id).emit('invalidMove', { id }); return; }
     const alreadyMoved = tok.hasMovedEver === true;
     const baseSteps = alreadyMoved ? 1 : 2;
     const charStepBonus = (ch && ch.fx && ch.fx.moveBonusThisTurn) ? ch.fx.moveBonusThisTurn : 0;
     const bearStepBonus = (ch && ch.fx && ch.fx.bear && ch.fx.bear.remaining > 0) ? 1 : 0;
-    const steps = baseSteps + (ts.moveBuff?.stepsBonus || 0) + charStepBonus + bearStepBonus;
+    const bonusOnce = (ts.moveBuff?.stepsBonusNext || 0);
+    const bonusPersist = (ts.moveBuff?.stepsBonus || 0);
+    const steps = baseSteps + bonusPersist + bonusOnce + charStepBonus + bearStepBonus;
     const minSteps = ts.moveBuff?.minSteps || 0;
 
     const dist = shortestDistance(st, tok.tile, toTile, blocked);
@@ -1030,7 +1206,8 @@ sendFullState(st.roomId);
 
     tok.tile = toTile;
     tok.hasMovedEver = true;
-    ts.usedMovement = true;
+    ts.moved = ts.moved || {}; ts.moved[id] = true;
+    if (ts.moveBuff && ts.moveBuff.stepsBonusNext) ts.moveBuff.stepsBonusNext = 0;
 
     io.to(st.roomId).emit('move', { id, owner: mySeat, toTile, capturedId: null });
     maybeEndTurn(st, mySeat);
@@ -1050,7 +1227,7 @@ sendFullState(st.roomId);
     {
       const defAoe = (getCharDef(st, st.chars.get(sourceId)) || {}).primary;
       if (defAoe && defAoe.type === 'aoe') {
-        const tok = st.tokens.get(sourceId);
+        { const ts = st.turnState[seat] || (st.turnState[seat] = {}); if (ts.acted && ts.acted[sourceId]) return; } const tok = st.tokens.get(sourceId);
         if (!tok) return;
         const ring = neighbors(st, tok.tile) || [];
         const walls = wallsSet(st);
@@ -1065,7 +1242,7 @@ sendFullState(st.roomId);
           }
         }
         const ts2 = st.turnState[seat] || (st.turnState[seat] = {});
-        ts2.usedAction = true;
+       ts2.acted = ts2.acted || {}; ts2.acted[sourceId] = true;  ts2.acted = ts2.acted || {}; ts2.acted[sourceId] = true;
         io.to(st.roomId).emit('abilityUsed', { kind:'primary', sourceId, targetId: sourceId, name: defAoe.name || 'Reverse Polarity', hits });
         st.lastDiscard[seat] = (defAoe.name || 'Reverse Polarity');
     io.to(st.roomId).emit('cardPlayed', { type: (defAoe.name || 'Reverse Polarity'), who: seat });
@@ -1089,7 +1266,7 @@ sendFullState(st.roomId);
     if (d === Infinity) return;
     if (exact ? (d !== (def.range ?? 1)) : (d > (def.range ?? 1))) return;
 
-    const ts = st.turnState[seat];
+    const ts = st.turnState[seat]; if (!ts.acted) ts.acted = {};
     let lastPrimaryDmg = null;
 
 
@@ -1102,7 +1279,7 @@ sendFullState(st.roomId);
       pay(st, seat, cardType);
       return true;
     }
-    if (ts.usedAction) return;
+    if (ts.acted && ts.acted[sourceId]) return;
 
     
 
@@ -1136,7 +1313,7 @@ if (def.type === 'damage') {
     }
     if (def.type === 'heal')   applyHeal(st, targetId, def.heal || 0);
 
-    ts.usedAction = true;
+    ts.acted = ts.acted || {}; ts.acted[sourceId] = true;
     io.to(st.roomId).emit('abilityUsed', { kind:'primary', sourceId, targetId, name:def.name });
     let __type = def.name;
     try{ const _src = st.chars.get(sourceId); if (_src && _src.name === 'Little Bear' && _src.fx && _src.fx.bear && _src.fx.bear.remaining>0){ __type = 'Bear Claw'; } }catch(e){}
@@ -1172,6 +1349,9 @@ socket.on('useSpecial', ({ sourceId, targetId })=>{
     const src = st.chars.get(sourceId); const tgt = st.chars.get(targetId);
     if (!src || !tgt) return;
     if (st.tokens.get(sourceId)?.owner !== seat) return;
+    // Per-character action guard (specials share the same 1/turn gate as primaries)
+    { const ts = st.turnState[seat] || (st.turnState[seat] = {}); if (ts.acted && ts.acted[sourceId]) return; }
+
 
     // Move/transfer entangle when swapping later
     try {
@@ -1186,6 +1366,21 @@ socket.on('useSpecial', ({ sourceId, targetId })=>{
     const def = getCharDef(st, src) || {};
     const spec = def.special || {};
 
+// Self-heal specials (e.g., Don Atore — Replenish)
+if (spec && spec.type === 'selfHeal') {
+  if (!requirePay(spec.name || 'Replenish')) return;
+  const amt = (spec.heal ?? spec.amount ?? 5);
+  applyHeal(st, sourceId, amt);
+  const ts = st.turnState[seat] || (st.turnState[seat] = {});
+  if (!ts.acted) ts.acted = {}; ts.acted[sourceId] = true;
+  io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, targetId: sourceId, name: spec.name || 'Replenish', extra:{ healed:[sourceId], amount: amt } });
+  st.lastDiscard[seat] = spec.name || 'Replenish';
+  io.to(st.roomId).emit('cardPlayed', { type: spec.name || 'Replenish', who: seat });
+  maybeEndTurn(st, seat);
+  return;
+}
+
+
     // Dungeon Master — Skill Check (ally buff next turn)
     if (spec.type === 'buff'){
       const srcTok = st.tokens.get(sourceId); const tgtTok = st.tokens.get(targetId);
@@ -1197,7 +1392,8 @@ socket.on('useSpecial', ({ sourceId, targetId })=>{
       const tfx = getFx(st, targetId);
       tfx.skillCheckNext = { move: 1, attack: 1, remaining: 1 };
       const ts = st.turnState[seat] || (st.turnState[seat] = {});
-      ts.usedAction = true; ts.cardPlayed = true;
+      if (!ts.acted) ts.acted = {};
+      ts.acted = ts.acted || {}; ts.acted[sourceId] = true; 
       io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, targetId, name: spec.name || 'Skill Check', extra:{ attack:+1, move:+1 } });
       st.lastDiscard[seat] = spec.name || 'Skill Check';
       io.to(st.roomId).emit('cardPlayed', { type: spec.name || 'Skill Check', who: seat });
@@ -1295,7 +1491,8 @@ if (K > 0){
 }
 
 const ts = st.turnState[seat] || (st.turnState[seat] = {});
-    ts.usedAction = true;
+      if (!ts.acted) ts.acted = {};
+    ts.acted = ts.acted || {}; ts.acted[sourceId] = true;
     io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, targetId: sourceId, name: spec.name || 'Polar Attraction' });
     st.lastDiscard[seat] = spec.name || 'Polar Attraction' ;
     io.to(st.roomId).emit('cardPlayed', { type: spec.name || 'Polar Attraction' , who: seat });
@@ -1312,7 +1509,8 @@ const ts = st.turnState[seat] || (st.turnState[seat] = {});
       const tfx = getFx(st, targetId);
       tfx.bear = { remaining: 3, reduce: 2 };
       const ts = st.turnState[seat] || (st.turnState[seat] = {});
-      ts.usedAction = true; ts.cardPlayed = true;
+      if (!ts.acted) ts.acted = {};
+      ts.acted = ts.acted || {}; ts.acted[sourceId] = true; 
       io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, targetId: sourceId, name: spec.name || 'Transform' });
       st.lastDiscard[seat] = spec.name || 'Transform';
       io.to(st.roomId).emit('cardPlayed', { type: spec.name || 'Transform', who: seat });
@@ -1325,7 +1523,8 @@ if (spec.type === 'redirect'){
       const sfx = getFx(st, sourceId);
       sfx.redirect = { remaining: spec.duration || 2 };
       const ts = st.turnState[seat] || (st.turnState[seat] = {});
-      ts.usedAction = true;
+      if (!ts.acted) ts.acted = {};
+      ts.acted = ts.acted || {}; ts.acted[sourceId] = true;
       io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, targetId: sourceId, name: 'Voodoo Doll' });
       st.lastDiscard[seat] = 'Voodoo Doll' ;
     io.to(st.roomId).emit('cardPlayed', { type: 'Voodoo Doll' , who: seat });
@@ -1354,7 +1553,8 @@ if (spec.type === 'redirect'){
         }
       }
       const ts = st.turnState[seat] || (st.turnState[seat] = {});
-      ts.usedAction = true;
+      if (!ts.acted) ts.acted = {};
+      ts.acted = ts.acted || {}; ts.acted[sourceId] = true;
       io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, targetId, name:'FMJ', tiles, hits });
       st.lastDiscard[seat] = 'FMJ';
     io.to(st.roomId).emit('cardPlayed', { type: 'FMJ', who: seat });
@@ -1381,7 +1581,7 @@ if (spec.type === 'redirect'){
       const tiles = [centerTile, ...neighbors(st, centerTile)];
       if (!st.tileAuras) st.tileAuras = { blossoms: [] };
       st.tileAuras.blossoms.push({ owner: seat, center: centerTile, tiles, remaining: 2, centerHeal: 2, petalHeal: 1 });
-      const ts = st.turnState[seat]; ts.usedAction = true;
+      const ts = st.turnState[seat]; ts.acted = ts.acted || {}; ts.acted[sourceId] = true;
       io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, name: spec.name || 'Healing Blossom', extra:{ centerTile, tiles } });
       st.lastDiscard[seat] = spec.name || 'Healing Blossom';
     io.to(st.roomId).emit('cardPlayed', { type: spec.name || 'Healing Blossom', who: seat });
@@ -1418,7 +1618,8 @@ if (spec.type === 'redirect'){
         }
       }
       const ts = st.turnState[seat] || (st.turnState[seat] = {});
-      ts.usedAction = true;
+      if (!ts.acted) ts.acted = {};
+      ts.acted = ts.acted || {}; ts.acted[sourceId] = true;
       io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, targetId, name: spec.name || 'Healing Blossom', extra:{healed} });
       st.lastDiscard[seat] = spec.name || 'Healing Blossom';
     io.to(st.roomId).emit('cardPlayed', { type: spec.name || 'Healing Blossom', who: seat });
@@ -1436,11 +1637,8 @@ const tokA = st.tokens.get(sourceId);
       tokA.tile = b; tokB.tile = a;
 
       const ts = st.turnState[seat] || (st.turnState[seat] = {});
-      // Swap is movement only; do not consume action
-      // ts.usedAction = true;
-
-      
-      ts.usedMovement = true;
+      if (!ts.acted) ts.acted = {};
+      ts.acted = ts.acted || {}; ts.acted[sourceId] = true;ts.moved = ts.moved || {}; ts.moved[sourceId] = true; ts.moved[targetId] = true;
 io.to(st.roomId).emit('move', { id: sourceId, owner: seat, toTile: tokA.tile, capturedId: null });
       io.to(st.roomId).emit('move', { id: targetId, owner: tgt.owner, toTile: tokB.tile, capturedId: null });
       io.to(st.roomId).emit('abilityUsed', { kind:'special', sourceId, targetId, name: 'Swap' });
@@ -1450,6 +1648,41 @@ io.to(st.roomId).emit('move', { id: sourceId, owner: seat, toTile: tokA.tile, ca
       return;
     }
   });
+
+/* ---------- PRIMARY: Don Atore — Blood Donation (tap-to-heal) ---------- */
+socket.on('don:tapHeal', ({ sourceId, targetId })=>{
+  const roomId = [...socket.rooms].find(r => rooms.has(r));
+  if (!roomId) return;
+  const st = rooms.get(roomId); if (!st || st.gameEnded) return;
+  const seat = st.seatBySocket.get(socket.id);
+  if (!seat || seat !== st.currentTurn) return;
+
+  const srcTok = st.tokens.get(sourceId); const tgtTok = st.tokens.get(targetId);
+  const srcChar = st.chars.get(sourceId);
+  if (!srcTok || !tgtTok || !srcChar) return;
+  // must own the source; target must be an ally
+  if (srcTok.owner !== seat) return;
+  if (tgtTok.owner !== seat) return;
+
+  // Per-character action guard (primaries share 1/turn gate)
+  {}
+
+  // range check (range 1)
+  const d = shortestDistance(st, srcTok.tile, tgtTok.tile, wallsSet(st));
+  if (d === Infinity || d > 1) return;
+
+  // Apply: source loses 1, target heals 1
+  applyDamage(st, sourceId, 1);
+  applyHeal(st, targetId, 1);
+
+  // Mark action used for this unit
+  const ts = st.turnState[seat] || (st.turnState[seat] = initialTurnState());
+  
+
+  // Broadcast ability usage
+  io.to(st.roomId).emit('abilityUsed', { kind:'primary', sourceId, targetId, name:'Blood Donation', extra:{ healed:[targetId], amount:1, selfLoss:1 } });
+  });
+
 
 
 /* ---------- CARDS ---------- */
@@ -1477,7 +1710,7 @@ socket.on('playCard', function(payload){
     if (!seat || seat !== st.currentTurn) return;
 
     const ts = st.turnState[seat];
-    if (ts.cardPlayed) return; // one card per turn (global guard)
+     // one card per turn (global guard)
 
 
     // [ENERGY] helper to validate/deduct energy for a card
@@ -1495,15 +1728,13 @@ socket.on('playCard', function(payload){
 
       // Fireball — apply DoT to enemy for 3 turns (2 dmg/turn)
       if (type === 'Fireball'){
-        if (ts.usedAction) return;
-        if (!targetId) return;
+if (!targetId) return;
         const tgt = st.chars.get(targetId); if (!tgt) return;
         if (tgt.owner === seat) return; // enemy only
         
         /* [ENERGY] pay cost for Fireball */
         if (!requirePay('Fireball')) return;
 const fx = getFx(st, targetId); fx.fireDot = { remaining:3, per:2 };
-        ts.usedAction = true; ts.cardPlayed = true;
         io.to(st.roomId).emit('cardPlayed', { type, targetId });
         maybeEndTurn(st, seat);
         return;
@@ -1511,15 +1742,13 @@ const fx = getFx(st, targetId); fx.fireDot = { remaining:3, per:2 };
 
       // Entangle — root enemy for 2 turns
       if (type === 'Entangle'){
-        if (ts.usedAction) return;
-        if (!targetId) return;
+if (!targetId) return;
         const tgt = st.chars.get(targetId); if (!tgt) return;
         if (tgt.owner === seat) return; // enemy only
         
         /* [ENERGY] pay cost for Entangle */
         if (!requirePay('Entangle')) return;
 const fx = getFx(st, targetId); fx.entangle = { remaining: 3 };
-        ts.usedAction = true; ts.cardPlayed = true;
         io.to(st.roomId).emit('cardPlayed', { type, targetId });
         maybeEndTurn(st, seat);
         return;
@@ -1527,34 +1756,30 @@ const fx = getFx(st, targetId); fx.entangle = { remaining: 3 };
 
       // Iron Skin — -2 incoming damage for 2 turns (ally/self only)
       if (type === 'Cleanse'){
-        if (ts.usedAction) return;
-        if (!targetId) return;
+if (!targetId) return;
         /* [ENERGY] pay cost for Cleanse */
         if (!requirePay('Cleanse')) return;
         const ch = st.chars.get(targetId);
         if (!ch) return;
         // Wipe all status effects on the target (ally or enemy)
         ch.fx = {};
-        ts.usedAction = true; ts.cardPlayed = true;
         io.to(st.roomId).emit('cardPlayed', { type, targetId });
         maybeEndTurn(st, seat);
         return;
       }
       if (type === 'IronSkin'){
-        if (ts.usedAction) return;
-        if (!targetId) return;
+if (!targetId) return;
         const ally = st.chars.get(targetId); if (!ally) return;
         if (ally.owner !== seat) return; // must be ally
         
         /* [ENERGY] pay cost for IronSkin */
         if (!requirePay('IronSkin')) return;
 const fx = getFx(st, targetId); fx.ironSkin = { remaining:2, reduce:2 };
-        ts.usedAction = true; ts.cardPlayed = true;
         io.to(st.roomId).emit('cardPlayed', { type, targetId });
         maybeEndTurn(st, seat);
         return;
       }
-        if (ts.cardPlayed) return; // only one card per turn
+         // only one card per turn
 
     function emitCardPlayed(extra={}){
       io.to(st.roomId).emit('cardPlayed', { type, who: seat, ...extra });
@@ -1566,7 +1791,7 @@ const fx = getFx(st, targetId); fx.ironSkin = { remaining:2, reduce:2 };
       // Energy Siphon — Instant: pay 3, gain 2 energy; opponent loses 3
       if (type === 'Siphon'){
         // obey one-card-per-turn rule
-        if (ts.cardPlayed) return;
+        
         /* [ENERGY] pay cost for Energy Siphon */
         if (!canPay(st, seat, 'Siphon')) return;
         ensureEnergy(st);
@@ -1575,40 +1800,40 @@ const fx = getFx(st, targetId); fx.ironSkin = { remaining:2, reduce:2 };
         // apply effects
         st.energy[seat] = Math.min(ENERGY_MAX, (st.energy[seat] || 0) + gain);
         st.energy[opp]  = Math.max(0, (st.energy[opp]  || 0) - steal);
-        ts.cardPlayed = true;
+        
         emitCardPlayed({ gain, steal });
         sendFullState(roomId);
         return;
       }
 if (type === 'Sprint'){
-      if (ts.usedMovement) return; // can't buff after you've already moved
+      if (ts.moved && ts.moved[sourceId]) return; // can't buff after this unit already moved
       
         /* [ENERGY] pay cost for Sprinter */
         if (!requirePay('Sprint')) return;
-ts.moveBuff.stepsBonus = (ts.moveBuff.stepsBonus||0) + 1;
-      ts.cardPlayed = true;
-      emitCardPlayed({ stepsBonus: ts.moveBuff.stepsBonus });
+ts.moveBuff.stepsBonusNext = (ts.moveBuff.stepsBonusNext||0) + 1;
+      
+      emitCardPlayed({ stepsBonus: ts.moveBuff.stepsBonusNext });
       sendFullState(roomId);
       return;
     }
     if (type === 'Dash'){
-      if (ts.usedMovement) return;
+      if (ts.moved && ts.moved[sourceId]) return;
       
         /* [ENERGY] pay cost for Dash */
         if (!requirePay('Dash')) return;
 ts.moveBuff.stepsBonus = (ts.moveBuff.stepsBonus||0) + 2;
-      ts.cardPlayed = true;
-      emitCardPlayed({ stepsBonus: ts.moveBuff.stepsBonus });
+      
+      emitCardPlayed({ stepsBonus: ts.moveBuff.stepsBonusNext });
       sendFullState(roomId);
       return;
     }
     if (type === 'Blink'){
-      if (ts.usedMovement) return;
+      if (ts.moved && ts.moved[sourceId]) return;
       
         /* [ENERGY] pay cost for Blink */
         if (!requirePay('Blink')) return;
 ts.moveBuff.minSteps = Math.max(ts.moveBuff.minSteps||0, 2);
-      ts.cardPlayed = true;
+      
       emitCardPlayed({ minSteps: ts.moveBuff.minSteps });
       sendFullState(roomId);
       return;
@@ -1616,11 +1841,7 @@ ts.moveBuff.minSteps = Math.max(ts.moveBuff.minSteps||0, 2);
 
     // Scout = action
     if (type === 'Scout'){
-      if (ts.usedAction) return;
-      ts.cardPlayed = true;
-      ts.usedAction = true;
-      
-        /* [ENERGY] pay cost for Scout */
+/* [ENERGY] pay cost for Scout */
         if (!requirePay('Scout')) return;
 emitCardPlayed();
       maybeEndTurn(st, seat);
@@ -1628,13 +1849,12 @@ emitCardPlayed();
     }
 
 if (type === 'Wall'){
-  if (ts.usedAction) return;
-  if (!tile) return;
+if (!tile) return;
     /* [ENERGY] pay cost for Wall */
   if (!requirePay('Wall')) return;
   if (!placeWall(st, tile)) return;
-  ts.cardPlayed = true;
-  ts.usedAction = true; // counts as action
+  
+  // counts as action
   emitCardPlayed({ tile });
   // BEFORE: sendFullState(roomId);
   // AFTER:
@@ -1642,31 +1862,31 @@ if (type === 'Wall'){
   return;
 }
 
-if (type === 'BlossomWall'){
-  const st = rooms.get(roomId); if (!st || st.gameEnded) return;
-  const ts = st.turnState[seat] || (st.turnState[seat] = {});
-  if (ts.usedAction) return;
+if (type === 'BlossomWall') {
+  // Heal Blossom: place center + pink ring; costs energy; counts as action for the casting character
   if (!tile) return;
-  // [ENERGY] pay for Healing Petal on successful placement (same timing as other cards)
+  if (sourceId) {
+    const ts = st.turnState[seat] || (st.turnState[seat] = {});
+    if (ts.acted && ts.acted[sourceId]) return;
+  }
   if (!requirePay('HealingPetal')) return;
   if (!placeBlossomWall(st, tile, seat)) return;
   placeBlossomPinkRing(st, tile, seat);
-  ts.cardPlayed = true;
-  ts.usedAction = true; // counts as action
+  if (sourceId) {
+    const ts = st.turnState[seat] || (st.turnState[seat] = {});
+    ts.acted = ts.acted || {}; ts.acted[sourceId] = true;
+  }
   emitCardPlayed({ type:'BlossomWall', tile, owner: seat });
   maybeEndTurn(st, seat);
   return;
 }
-
-
 if (type === 'Shatter'){
-  if (ts.usedAction) return;
-  if (!tile) return;
+if (!tile) return;
             /* [ENERGY] pay cost for Quake */
       if (!requirePay('Shatter')) return;
   if (!clearWall(st, tile)) return;
-  ts.cardPlayed = true;
-  ts.usedAction = true; // counts as action
+  
+  // counts as action
   emitCardPlayed({ tile });
   // BEFORE: sendFullState(roomId);
   // AFTER:
@@ -1676,7 +1896,7 @@ if (type === 'Shatter'){
 
     // Teleport = movement action (already moves the piece)
     if (type === 'Teleport'){
-      if (ts.usedMovement) return;
+      if (ts.moved && ts.moved[sourceId]) return;
       
         
       // Block teleport if rooted (entangled)
@@ -1693,8 +1913,8 @@ const tok = st.tokens.get(sourceId);
 
       tok.tile = toTile;
       tok.hasMovedEver = true;
-      ts.usedMovement = true;
-      ts.cardPlayed = true;
+      ts.moved = ts.moved || {}; ts.moved[sourceId] = true;
+      
 
       emitCardPlayed({ sourceId, toTile });
       io.to(st.roomId).emit('move', { id: sourceId, owner: seat, toTile, capturedId: null });
@@ -1743,3 +1963,399 @@ server.listen(PORT, () => {
   console.log(`Chaotic Neutral listening on http://localhost:${PORT}`);
 });
 // [Patch] AoE1 primary handled in usePrimary above.
+
+/* Control Points helpers (top-level) */
+function initControlPoints(st){
+  try{
+    const ids = Object.keys(st.tilePositions||{});
+    if (!ids.length) return;
+    const eligible = ids.filter(id => (st.adjacency && (st.adjacency[id]||[]).length >= 3));
+    const seedStr = String(st.roomId||'seed');
+    let h=0; for (let i=0;i<seedStr.length;i++){ h = (h*31 + seedStr.charCodeAt(i))|0; }
+        const pick = (st.tilePositions && st.tilePositions.E1) ? 'E1' : (eligible[0] || ids[0]);
+    const nbs = (st.adjacency && st.adjacency[pick] ? st.adjacency[pick].slice() : []);
+    nbs.sort((a,b)=>{
+      const pa = st.tilePositions[a], pb = st.tilePositions[b];
+      const da = Math.hypot(pa.x - st.centerX, pa.y - st.centerY);
+      const db = Math.hypot(pb.x - st.centerX, pb.y - st.centerY);
+      return da - db;
+    });
+    st.control = { anchor: pick, tiles: Array.from(new Set(nbs)).slice(0,3), scores:{ player1:0, player2:0 } };
+  }catch(e){ st.control = { anchor:null, tiles:[], scores:{player1:0,player2:0} }; }
+}
+
+function scoreControlRound(st){
+  if (!st || st.mode!=='control' || !st.control) return;
+  let p1=0, p2=0;
+  const tileSet = new Set(st.control.tiles||[]);
+  const anchor = st.control.anchor || null;
+
+  if (st.tokens && typeof st.tokens.forEach === 'function'){
+    st.tokens.forEach((tok)=>{
+      if (!tok || !tok.tile) return;
+      if (anchor && tok.tile === anchor){
+        if (tok.owner==='player1') p1 += 2;
+        else if (tok.owner==='player2') p2 += 2;
+      } else if (tileSet.has(tok.tile)){
+        if (tok.owner==='player1') p1++;
+        else if (tok.owner==='player2') p2++;
+      }
+    });
+  } else if (st.tokens && Symbol.iterator in Object(st.tokens)){
+    for (const [, tok] of st.tokens){
+      if (!tok || !tok.tile) continue;
+      if (anchor && tok.tile === anchor){
+        if (tok.owner==='player1') p1 += 2;
+        else if (tok.owner==='player2') p2 += 2;
+      } else if (tileSet.has(tok.tile)){
+        if (tok.owner==='player1') p1++;
+        else if (tok.owner==='player2') p2++;
+      }
+    }
+  }
+
+  st.control.scores = st.control.scores || { player1:0, player2:0 };
+  st.control.scores.player1 += p1;
+  st.control.scores.player2 += p2;
+
+  if (st.control.scores.player1 >= 10 || st.control.scores.player2 >= 10){
+    const winner = (st.control.scores.player1 >= 10) ? 'player1' : 'player2';
+    try { st.gameEnded = true; io.to(st.roomId).emit('gameOver', { winner }); } catch(_){}
+  }
+}
+
+
+/* =====================================================================
+   Control Mode: Best-of-5 rounds with progress-to-10 and mirroring
+   ---------------------------------------------------------------------
+   This block overrides scoreControlRound(st) without touching the rest.
+   It lazily creates st.control.progress {p1,p2} and st.control.round.
+   On round win (>=10), it increments series score, mirrors control
+   anchor/tiles and respawn points, resets progress, and checks first-to-3.
+   ===================================================================== */
+
+function __cn_mirrorTile(st, tileId){
+  try{
+    if (!st || !st.tilePositions || !st.tilePositions[tileId]) return tileId;
+    const pos = st.tilePositions[tileId];
+    const targetX = 2*st.centerX - pos.x;
+    const targetY = 2*st.centerY - pos.y;
+    let bestId = tileId, bestD = Infinity;
+    for (const [id, p] of Object.entries(st.tilePositions)){
+      const dx = p.x - targetX, dy = p.y - targetY;
+      const d = dx*dx + dy*dy;
+      if (d < bestD){ bestD = d; bestId = id; }
+    }
+    return bestId;
+  }catch(_){ return tileId; }
+}
+
+function __cn_mirrorRespawnPoints(st){
+  try{
+    if (!st || !st.respawnAt) return;
+    const next = {};
+    for (const k of Object.keys(st.respawnAt)){
+      next[k] = __cn_mirrorTile(st, st.respawnAt[k]);
+    }
+    st.respawnAt = next;
+  }catch(_){ /* noop */ }
+}
+
+function __cn_mirrorControl(st){
+  try{
+    if (!st || !st.control) return;
+    const anc = st.control.anchor;
+    const tiles = st.control.tiles || [];
+    st.control.anchor = anc ? __cn_mirrorTile(st, anc) : anc;
+    st.control.tiles  = tiles.map(t => __cn_mirrorTile(st, t));
+  }catch(_){ /* noop */ }
+}
+
+// Override
+function scoreControlRound(st){
+  if (!st || st.mode!=='control' || !st.control) return;
+
+  // Lazy init
+  if (!st.control.scores) st.control.scores = { player1:0, player2:0 };
+  if (!st.control.progress) st.control.progress = { player1:0, player2:0 };
+  if (typeof st.control.round !== 'number') st.control.round = 1;
+
+  // Tally this tick
+  let p1=0, p2=0;
+  const tset = new Set(st.control.tiles || []);
+  const anc  = st.control.anchor || null;
+  for (const [id, tok] of st.tokens){
+    if (!tok || !tok.tile) continue;
+    if (anc && tok.tile === anc){
+      if (tok.owner==='player1') p1 += 2;
+      else if (tok.owner==='player2') p2 += 2;
+    } else if (tset.has(tok.tile)){
+      if (tok.owner==='player1') p1 += 1;
+      else if (tok.owner==='player2') p2 += 1;
+    }
+  }
+  st.control.progress.player1 += p1;
+  st.control.progress.player2 += p2;
+
+  // Round completion
+  let roundWinner = null;
+  if (st.control.progress.player1 >= 10) roundWinner = 'player1';
+  if (st.control.progress.player2 >= 10) roundWinner = 'player2';
+
+  if (roundWinner){
+    st.control.scores[roundWinner] += 1;
+    st.control.tally.player1 += p1;
+      st.control.tally.player2 += p2;
+      st.control.round += 1;
+
+    // Reset progress for next round
+    st.control.progress = { player1:0, player2:0 };
+
+    // Mirror for the next round
+    __cn_mirrorControl(st);
+    __cn_mirrorRespawnPoints(st);
+
+    // Notify
+    try{ io.to(st.roomId).emit('roundWon', { winner: roundWinner, scores: { ...st.control.scores }, round: st.control.round }); }catch(_){}
+
+    // Best of 5 => first to 3 ends
+    if (st.control.scores.player1 >= 3 || st.control.scores.player2 >= 3){
+      const matchWinner = (st.control.scores.player1 >= 3) ? 'player1' : 'player2';
+      st.gameEnded = true;
+      try{ io.to(st.roomId).emit('gameOver', { winner: matchWinner }); }catch(_){}
+    }
+  }
+}
+
+
+/* =====================================================================
+   RESPawn Flip: Same-half only (left <-> right) explicit pairs
+   - Keeps Player1 spawns on rows H/I (bottom half) and swaps side
+   - Keeps Player2 spawns on rows A/B (top half) and swaps side
+   - Safe to call multiple times
+   ===================================================================== */
+(function(){
+  const SAME_HALF_MAP = {
+    // Top half
+    A1:'A4', A2:'A3', A3:'A2', A4:'A1',
+    B1:'B5', B2:'B4', B4:'B2', B5:'B1',
+    // Bottom half
+    H1:'H5', H2:'H4', H4:'H2', H5:'H1',
+    I1:'I4', I2:'I3', I3:'I2', I4:'I1'
+  };
+  function sameHalfMirror(tile){
+    return SAME_HALF_MAP[tile] || tile;
+  }
+  // Provide a dedicated function (can be called by round logic)
+  globalThis.flipRespawnsSameHalf = function flipRespawnsSameHalf(st){
+    try{
+      if (!st || !st.respawnAt) return;
+      const next = {};
+      for (const [id, tile] of Object.entries(st.respawnAt)){
+        next[id] = sameHalfMirror(tile);
+      }
+      st.respawnAt = next;
+    }catch(_){}
+  };
+
+  // If older override functions exist, rewire them to this behavior
+  globalThis.__cn_mirrorRespawnPoints = function __cn_mirrorRespawnPoints(st){
+    return globalThis.flipRespawnsSameHalf ? globalThis.flipRespawnsSameHalf(st) : void 0;
+  };
+})();
+
+
+/* =====================================================================
+   CONTROL MODE RESPAWNS — stay on same half, swap left<->right
+   - RIGHT cluster comes from st.respawnAt (whatever your current spawns are).
+   - LEFT cluster is computed by mirroring RIGHT horizontally (same row).
+   - This keeps top spawns in rows A/B and bottom spawns in H/I.
+   ===================================================================== */
+(function(){
+  // Horizontal mirror map within same rows (A/B top half, H/I bottom half)
+  const SAME_HALF_MAP = {
+    // Top half
+    A1:'A4', A2:'A3', A3:'A2', A4:'A1',
+    B1:'B5', B2:'B4', B3:'B3', B4:'B2', B5:'B1',
+    // Bottom half
+    H1:'H5', H2:'H4', H3:'H3', H4:'H2', H5:'H1',
+    I1:'I4', I2:'I3', I3:'I2', I4:'I1'
+  };
+  function sameHalfMirror(tile){ return SAME_HALF_MAP[tile] || tile; }
+
+  // Compute a dynamic respawn tile given the character id and control side
+  globalThis.__cn_getRespawnTileDynamic = function __cn_getRespawnTileDynamic(st, id){
+    try{
+      if (!st || st.mode !== 'control') return null;
+      // Determine which side the control anchor is on
+      let anchorOnRight = true;
+      if (st.control && st.control.anchor && st.tilePositions && st.tilePositions[st.control.anchor]){
+        anchorOnRight = st.tilePositions[st.control.anchor].x >= st.centerX;
+      }
+      // Use current st.respawnAt as "RIGHT" canonical set; fallback to defaults if absent
+      const RIGHT = (st.respawnAt && typeof st.respawnAt === 'object') ? { ...st.respawnAt } : {
+        P1:'H4', P2:'I4', P3:'H5', P4:'I3',
+        E1:'B4', E2:'A4', E3:'B5', E4:'A3'
+      };
+      // Build LEFT by mirroring RIGHT within same rows
+      const LEFT = Object.fromEntries(Object.entries(RIGHT).map(([k,v])=>[k, sameHalfMirror(v)]));
+      const table = anchorOnRight ? RIGHT : LEFT;
+      return table[id] || null;
+    }catch(_){ return null; }
+  };
+})();
+
+
+/* =====================================================================
+   CONTROL: Strict same-row respawns + horizontal flips + best-of-5
+   - Respawns always stay on original ROW (H↔H, I↔I, A↔A, B↔B), swapping left↔right.
+   - At 10 PROGRESS: end ROUND, flip flag/control+respawns horizontally (same row), NEVER end match here.
+   - Match ends ONLY at 3 round wins.
+   ===================================================================== */
+(function(){
+  // Exact same-row left<->right pairs
+  const SAME_ROW = {
+    // Top half rows
+    A1:'A4', A2:'A3', A3:'A2', A4:'A1',
+    B1:'B5', B2:'B4', B3:'B3', B4:'B2', B5:'B1',
+    // Bottom half rows
+    H1:'H5', H2:'H4', H3:'H3', H4:'H2', H5:'H1',
+    I1:'I4', I2:'I3', I3:'I2', I4:'I1'
+  };
+  function __CN_sameRowSwap(t){ return SAME_ROW[t] || t; }
+  function __CN_rowOf(t){ return (t && typeof t === 'string') ? t[0] : null; }
+
+  // Strict same-row open-tile finder for respawns (radius 3, same-row only)
+  globalThis.__CN_findOpenTileSameRowNear = function __CN_findOpenTileSameRowNear(st, preferred){
+    try{
+      if (!preferred || !st || !st.tilePositions) return preferred;
+      const row = __CN_rowOf(preferred);
+      const occ = new Set(); st.tokens.forEach((v)=>{ if (v && v.tile) occ.add(v.tile); });
+      const walls = new Set(st.walls.keys());
+      // If preferred itself is open, take it
+      if (st.tilePositions[preferred] && !occ.has(preferred) && !walls.has(preferred)) return preferred;
+
+      // BFS but only along the SAME row
+      const seen = new Set([preferred]);
+      let frontier = [preferred];
+      for (let depth=0; depth<3; depth++){
+        const next = [];
+        for (const cur of frontier){
+          const nbs = st.adjacency[cur] || [];
+          for (const n of nbs){
+            if (seen.has(n)) continue;
+            seen.add(n);
+            if (__CN_rowOf(n) !== row) continue; // hard constraint: same row only
+            if (!occ.has(n) && !walls.has(n)) return n;
+            next.push(n);
+          }
+        }
+        frontier = next;
+      }
+      // Nothing found; return preferred as a last resort (engine will handle placement)
+      return preferred;
+    }catch(_){ return preferred; }
+  };
+
+  // Mirror a single tile horizontally (flip X, penalize Y drift to keep same row)
+  function __CN_mirrorX_sameRow(st, tileId){
+    try{
+      if (!st || !st.tilePositions || !st.tilePositions[tileId]) return tileId;
+      const p = st.tilePositions[tileId];
+      const targetX = 2*st.centerX - p.x;
+      const targetY = p.y; // keep same Y ideal
+      let best = tileId, bestScore = Infinity;
+      for (const [id, tp] of Object.entries(st.tilePositions)){
+        const dx = tp.x - targetX, dy = tp.y - targetY;
+        const score = dx*dx + (dy*dy)*1000; // huge penalty for changing rows
+        if (score < bestScore){ bestScore = score; best = id; }
+      }
+      return best;
+    }catch(_){ return tileId; }
+  }
+
+  // Flip respawns strictly within same row
+  function __CN_flipRespawnsSameRow(st){
+    try{
+      if (!st || !st.respawnAt) return;
+      const next = {};
+      for (const [id, t] of Object.entries(st.respawnAt)){
+        next[id] = __CN_sameRowSwap(t);
+      }
+      st.respawnAt = next;
+    }catch(_){ /* noop */ }
+  }
+  // Flip control anchor + tiles horizontally (prefer staying on same row visually)
+  function __CN_flipControlHorizontal(st){
+    try{
+      if (!st || !st.control) return;
+      if (st.control.anchor) st.control.anchor = __CN_mirrorX_sameRow(st, st.control.anchor);
+      st.control.tiles = (st.control.tiles||[]).map(t => __CN_mirrorX_sameRow(st, t));
+    }catch(_){ /* noop */ }
+  }
+
+  // Authoritative respawn picker (prefers st.respawnAt; can be customized per id later)
+  globalThis.__CN_pickRespawn = function __CN_pickRespawn(st, id){
+    try{
+      if (!st) return null;
+      const t = (st.respawnAt && st.respawnAt[id]) || null;
+      return t;
+    }catch(_){ return null; }
+  };
+
+  // Rounds scoring override: 10 -> round win; flip; best-of-5
+  function scoreControlRoundOverride(st){
+    if (!st || st.mode!=='control' || !st.control) return;
+    // Tally this tick (anchor +2, neighbors +1)
+    let p1=0, p2=0;
+    const tiles = new Set(st.control.tiles || []);
+    const anc = st.control.anchor || null;
+    for (const [id, tok] of st.tokens){
+      if (!tok || !tok.tile) continue;
+      if (anc && tok.tile === anc){
+        if (tok.owner==='player1') p1 += 2; else if (tok.owner==='player2') p2 += 2;
+      } else if (tiles.has(tok.tile)){
+        if (tok.owner==='player1') p1 += 1; else if (tok.owner==='player2') p2 += 1;
+      }
+    }
+    st.control.progress = st.control.progress || { player1:0, player2:0 };
+    st.control.scores   = st.control.scores   || { player1:0, player2:0 };
+    st.control.tally = st.control.tally || { player1:0, player2:0 };
+    st.control.round    = (typeof st.control.round==='number') ? st.control.round : 1;
+
+    st.control.progress.player1 += p1;
+    st.control.progress.player2 += p2;
+
+    let roundWinner = null;
+    if (st.control.progress.player1 >= 10) roundWinner = 'player1';
+    if (st.control.progress.player2 >= 10) roundWinner = 'player2';
+
+    if (roundWinner){
+      st.control.scores[roundWinner] += 1;
+      st.control.round += 1;
+      st.control.progress = { player1:0, player2:0 };
+
+      __CN_flipControlHorizontal(st);
+      __CN_flipRespawnsSameRow(st);
+
+      try { io.to(st.roomId).emit('roundWon', { winner: roundWinner, scores: { ...st.control.scores }, round: st.control.round }); } catch(_){}
+      try { sendFullState(st.roomId); } catch(_){}
+
+      if (st.control.scores.player1 >= 3 || st.control.scores.player2 >= 3){
+        const matchWinner = (st.control.scores.player1 >= 3) ? 'player1' : 'player2';
+        st.gameEnded = true;
+        try { io.to(st.roomId).emit('gameOver', { winner: matchWinner }); } catch(_){}
+      } else {
+        st.gameEnded = false; // NEVER end at 10
+      }
+    }
+  }
+
+  // Install override
+  try { scoreControlRound = scoreControlRoundOverride; } catch(_){ globalThis.scoreControlRound = scoreControlRoundOverride; }
+  // Force older helpers to our behavior
+  globalThis.__cn_mirrorRespawnPoints = __CN_flipRespawnsSameRow;
+  globalThis.flipRespawnsSameHalf     = __CN_flipRespawnsSameRow;
+  globalThis.mirrorRespawnPoints      = __CN_flipRespawnsSameRow;
+  globalThis.__cn_getRespawnTileDynamic = undefined; // disable drifting dynamic chooser
+})();

@@ -44,9 +44,17 @@
     }
     .top-home-btn:hover{ filter:brightness(1.1); }
   </style>
+
+  <style>
+    /* Parchment full-viewport background */
+    html, body { height: 100%; }
+    html { background: #111 url('assets/background.png') center / cover no-repeat fixed !important; }
+    body { background: transparent !important; }
+  </style>
 </head>
 <body>
   <a id="btnHome" href="/home" class="top-home-btn">⟵ Home</a>
+  <div id="seriesScoreTop" class="glass"><div class="label">Control Points</div><div class="score"><span id="seriesP1">0</span> — <span id="seriesP2">0</span></div></div>
   <div id="board">
     <div class="center-dot"></div>
 
@@ -63,6 +71,11 @@
       <div class="energybar"><div class="fill" style="width:0%"></div></div>
       <div class="energyNums"><span id="energyVal">0</span> / <span id="energyMax">10</span></div>
     </div>
+
+    <div id="controlScoreBox" class="glass" style="display:none">
+      <div class="score"><span id="p1Score">0</span> — <span id="p2Score">0</span></div>
+    </div>
+
 
     <!-- Hand: centered at bottom -->
     <div id="handWrap">
@@ -122,15 +135,37 @@ document.addEventListener('click', (e) => {
     if (!ROOM){ location.href = '/home'; }
     const PLAYER_NAME = sessionStorage.getItem('cn_name') || localStorage.getItem('cn_name') || '';
     const HEROES = JSON.parse(sessionStorage.getItem('cn_roster') || localStorage.getItem('cn_roster') || '[]');
+    const MODE = (new URLSearchParams(location.search).get('mode') || sessionStorage.getItem('cn_mode') || localStorage.getItem('cn_mode') || 'standard');
+    /* hide control UI when not in control mode */
+    if (MODE !== 'control') {
+      const top = document.getElementById('seriesScoreTop'); if (top) top.remove();
+      const box = document.getElementById('controlScoreBox'); if (box) box.remove();
+    }
+
+    sessionStorage.setItem('cn_mode', MODE); localStorage.setItem('cn_mode', MODE);
 
     const socket = io();
-    socket.emit('game:join', { room: ROOM, name: PLAYER_NAME, heroes: HEROES });
+    socket.emit('game:join', { room: ROOM, name: PLAYER_NAME, heroes: HEROES, mode: MODE });
 
     /* ---------- DOM ---------- */
     const board   = document.getElementById('board');
     const wallOverlayLayer = document.createElement('div');
     wallOverlayLayer.id = 'wallOverlayLayer';
     board.appendChild(wallOverlayLayer);
+
+    // Control Points overlay + flag
+    const controlOverlayLayer = document.createElement('div');
+    controlOverlayLayer.id = 'controlOverlayLayer';
+    board.appendChild(controlOverlayLayer);
+    const controlFlag = document.createElement('div');
+    controlFlag.id = 'controlFlag';
+    controlFlag.innerHTML = '<svg id="controlFlagSVG" viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg">\
+  <rect x="6" y="6" width="5" height="52" fill="#171717" rx="2" />\
+  <path d="M12 10 L44 20 L12 30 Z" fill="#e33" stroke="#b00" stroke-width="2" />\
+</svg>';
+    controlFlag.style.display = 'none';
+    board.appendChild(controlFlag);
+
     const wallOverlays = new Map();
 
     const hand    = document.getElementById('hand');
@@ -376,6 +411,7 @@ document.addEventListener('click', (e) => {
     let armedCardName = null;
     let simpleTarget = null; // { card: 'Fireball' | 'Entangle' | 'Iron Skin' } // requires board selection after pressing Play (wall/quake/teleport)
     let moveBuff = { stepsBonus:0, minSteps:0 }; // client preview; server authoritative
+    let moveBuffOnce = false; // true when Sprint was played; clear after first local move
 
     function applyWallLocal(tileId){ localWalls.add(tileId); addGhost(tileId, 'block wall persist'); showWallOverlay(tileId); }
     function removeWallLocal(tileId){ localWalls.delete(tileId); [...document.querySelectorAll('.ghost.block.wall')].filter(g=>g.title===tileId).forEach(el=>el.remove()); hideWallOverlay(tileId); }
@@ -447,8 +483,8 @@ document.addEventListener('click', (e) => {
         "Trickster": "assets/Character Images/Trickster.png",
         "Aimbot": "assets/Character Images/Aimbot.png",
         "Death Blossom": "assets/Character Images/Death_Blossom.png",
-        "Loadstone": "assets/Character Images/Loadstone.png",
-        "Little Bear": "assets/Character Images/Little_Bear.png"
+        "Loadstone": "assets/Character Images/Loadstone.png","Little Bear": "assets/Character Images/Little_Bear.png",
+        "Don Atore": "assets/Character Images/Don_Atore.png"
       };
       return map[name] || null;
     }
@@ -464,7 +500,7 @@ const ABIL_OVERRIDES = {
         color:'#93c47d',
         maxHp:10,
         primary:{ type:'heal', heal:2, range:2, name:'Nectar of Life' },
-        special:{ type:'petal', heal:3, range:99, radius:1, name:'Healing Blossom', energyCost:4 }
+        special:{ type:'petal', heal:3, range:99, radius:1, name:'Healing Blossom', energyCost:3 }
       },
 
       Trickster: {
@@ -495,7 +531,17 @@ const ABIL_OVERRIDES = {
         primary:{ type:'aoe',    dmg:2, range:1, name:'Reverse Polarity', autoSelf:true },
         special:{ type:'polar',  range:2, name:'Polar Attraction', energyCost:4, autoSelf:true }
       }
-      };
+      
+,
+"Don Atore": {
+  emoji:"🩸",
+  color:"#b22222",
+  maxHp:12,
+  movement:2,
+  primary:{ type:'tapHeal', name:'Blood Donation', range:1 },
+  special:{ type:"selfHeal", heal:5, range:0, name:"Replenish", energyCost:5, autoSelf:true }
+}
+};
     function getMeta(role, name){
       const base = ABIL_DEFS[role] || ABIL_DEFS.Tank;
       const ov = name && ABIL_OVERRIDES[name];
@@ -547,9 +593,23 @@ const ABIL_OVERRIDES = {
         const role = getRoleState(id) || guessRoleFromId(id);
         const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : (ABIL_DEFS[role]||ABIL_DEFS.Tank));
         if (!meta || !meta.primary) return;
-        const isHeal = (meta.primary.type === 'heal');
-        const amt = isHeal ? `${meta.primary.heal} heal` : `${meta.primary.dmg} dmg`;
-        text = `${meta.primary.name}: ${amt} (range ${meta.primary.range})`;
+        if (displayName === 'Don Atore' && meta.primary && meta.primary.type === 'tapHeal'){
+          const r = meta.primary.range ?? 1;
+          const txt = `${meta.primary.name}: -1HP for +1HP (R${r})`;
+          const firstLine = card.querySelector('.desc .descLine:first-child');
+          if (firstLine) firstLine.textContent = txt;
+          return;
+        }
+                const isHeal = (meta.primary.type === 'heal');
+let amt;
+if (displayName === 'Don Atore' && isHeal && meta.primary.selfLossEqual === true){
+  // shorter copy per request
+  text = `${meta.primary.name}: -1HP for +1HP (R${meta.primary.range})`;
+  return;
+} else {
+  amt = isHeal ? `${meta.primary.heal} heal` : `${meta.primary.dmg} dmg`;
+}
+text = `${meta.primary.name}: ${amt} (range ${meta.primary.range})`;
       }
       const firstLine = card.querySelector('.desc .descLine:first-child');
       if (firstLine) firstLine.textContent = text;
@@ -728,7 +788,18 @@ pendingMoves.set(token.dataset.id, startTile);
       const pct = Math.max(0, Math.min(100, Math.round(100 * st.hp / st.maxHp)));
       const isAlly = owner === playerRole;
 
-      const descPrimary = `${meta.primary.name}: ${meta.primary.type==='heal' ? (meta.primary.heal+' heal') : (meta.primary.dmg+' dmg')} (range ${meta.primary.range})`;
+            let descPrimary;
+if (
+  (displayName === 'Don Atore') &&
+  meta.primary && meta.primary.type === 'heal' &&
+  (meta.primary.selfLossEqual === true)
+) {
+  // shorter copy per request
+  descPrimary = `${meta.primary.name}: -1HP for +1HP (R${meta.primary.range})`;
+} else {
+        descPrimary = `${meta.primary.name}: ${meta.primary.type==='heal' ? (meta.primary.heal+' heal') : (meta.primary.dmg+' dmg')} (range ${meta.primary.range})`;
+      }
+
       
       
       // --- Special description (short custom text for certain abilities) ---
@@ -753,6 +824,8 @@ pendingMoves.set(token.dataset.id, startTile);
       } else if (meta.special.type === 'swap' || meta.special.type === 'redirect') {
         // Fallback for other swap/redirect variants
         descSpecial = `${meta.special.name || 'Special'}: ability`;
+      } else if (meta.special.type === 'selfHeal') {
+        descSpecial = `${meta.special.name || 'Special'}: heal ${meta.special.heal} (self)`;
       } else if (meta.special.type === 'heal') {
         descSpecial = `${meta.special.name || 'Special'}: ${meta.special.heal} heal (range ${meta.special.range || 1})`;
       } else if (meta.special.type === 'damage') {
@@ -797,7 +870,7 @@ pendingMoves.set(token.dataset.id, startTile);
         if (btn && meta && meta.special && meta.special.energyCost){ btn.textContent = `Special (${meta.special.energyCost}⚡)`; }
       })();
 
-      if (!isAlly || dead || GAME_ENDED){
+      if (!isAlly || dead || GAME_ENDED || (playerRole !== currentTurn)){
         wrap.querySelectorAll('button').forEach(b=>b.disabled = true);
       }else{
         wrap.querySelector('.primaryBtn').onclick = (ev)=>{ ev.stopPropagation(); if (!turnState.usedAction) selectAbility('primary', id); };
@@ -919,6 +992,7 @@ pendingMoves.set(token.dataset.id, startTile);
           addOrUpdateStatusLocal(sourceId, 'redirect', def.duration ?? 2);
         }
         abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
         document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
         clearGhosts();
         return;
@@ -931,6 +1005,7 @@ pendingMoves.set(token.dataset.id, startTile);
       // Toggle off if pressing the same ability again
       if (abilitySel && abilitySel.kind === kind && abilitySel.sourceId === sourceId){
         abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
         document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
         clearGhosts();
         return;
@@ -1012,6 +1087,8 @@ const CARD_COST = {
 }
 
     function setDiscardByWho(who, type){
+      if (!type) return; // persist last shown discard if server sends null/undefined
+
 
 // If Dungeon Master used 1D6 while Skill Check is active, 
 // swap to the '1D6SC-(roll+1)' artwork.
@@ -1060,6 +1137,7 @@ const CARD_COST = {
       const uiHit = e.target.closest('#end-turn, .charCard, #hand, .cbtn, .primaryBtn, .specialBtn, .card, button');
       if (uiHit && !e.target.closest('.token')){
         window.abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
         document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
         if (typeof clearGhosts === 'function') clearGhosts();
         return; // do not place
@@ -1076,10 +1154,23 @@ const CARD_COST = {
         const targetId = targetTok.dataset.id;
         const d = distanceTiles(tileOfToken(sourceId), tileOfToken(targetId));
         if (d !== Infinity && d <= range){
+          // Don Atore continuous tap-heal: intercept and keep selection armed
+          try{
+            const srcState = (charState && charState.get) ? charState.get(sourceId) : null;
+            const srcName = srcState && srcState.name;
+            const role = getRoleState(sourceId);
+            const meta = getMeta(role, srcName);
+            if (srcName === 'Don Atore' && meta && meta.primary && meta.primary.type === 'tapHeal' && targetTok.dataset.owner === playerRole){
+              if (typeof socket !== 'undefined'){ socket.emit('don:tapHeal', { sourceId, targetId }); }
+              try{ targetTok.classList.add('healPulse'); setTimeout(()=>targetTok.classList.remove('healPulse'), 180);}catch(_){}
+              return; // stay armed
+            }
+          }catch(_){}
           if (kind === 'primary'){ socket.emit('usePrimary', { sourceId, targetId }); }
           else { socket.emit('useSpecial', { sourceId, targetId }); }
         }
         abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
         document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
         clearGhosts();
         return;
@@ -1269,7 +1360,9 @@ const CARD_COST = {
 
 // Map for character-ability images in /assets/Character Ability Cards
 const ABILITY_CARD_IMG = {
-  "Transform":"Transform.png",
+  
+  
+  "Replenish":"Replenish.png","Blood Donation":"Blood_Donation.png","Transform":"Transform.png",
   "Bear Claw":"Bear_Claw.png",
   "Paw Swipe":"Paw_Swipe.png",
   "1D6":"1D6.png",
@@ -1356,16 +1449,28 @@ playFloat.addEventListener('click', (ev)=>{
       }
       placeEndButton();
     }
-    function insertIntoFirstPlaceholder(el){
-      const ph = hand.querySelector('.card.placeholder');
-      if (ph) hand.replaceChild(el, ph);
-      else hand.appendChild(el);
-      placeEndButton();
-    }
+    const MAX_HAND = 5;
+function handNonPlaceholderCount(){ return hand.querySelectorAll('.card:not(.placeholder)').length; }
+function handTotalSlots(){ return hand.querySelectorAll('.card').length; }
+function ensureHandSlots(){
+  let slots = handTotalSlots();
+  while (slots < MAX_HAND){ const ph = document.createElement('div'); ph.className='card placeholder'; hand.appendChild(ph); slots++; }
+}
+function insertIntoFirstPlaceholder(el){
+  ensureHandSlots();
+  if (handNonPlaceholderCount() >= MAX_HAND){ return; }
+  const ph = hand.querySelector('.card.placeholder');
+  if (ph) hand.replaceChild(el, ph);
+  else if (handNonPlaceholderCount() < MAX_HAND) hand.appendChild(el);
+  placeEndButton();
+}
+
     function drawOneAtEnd(){
-      const spec = deck[deckIdx % deck.length]; deckIdx++;
-      insertIntoFirstPlaceholder(createCardEl(spec.n, spec.d));
-    }
+  if (handNonPlaceholderCount() >= MAX_HAND) return;
+  const spec = deck[deckIdx % deck.length]; deckIdx++;
+  insertIntoFirstPlaceholder(createCardEl(spec.n, spec.d));
+}
+
     function moveToDiscard(cardEl){
       if (!cardEl) return;
       cardEl.classList.remove('selected');
@@ -1376,8 +1481,10 @@ playFloat.addEventListener('click', (ev)=>{
       document.body.classList.remove('has-selected');
       hidePlayFloat();
       clearGhosts();
+      // draw replacement immediately
+      if (typeof drawOneAtEnd === 'function') { drawOneAtEnd(); }
       placeEndButton();
-    }
+      }
 
     function previewEnemyReach(){
       clearGhosts();
@@ -1406,7 +1513,7 @@ playFloat.addEventListener('click', (ev)=>{
     }, true);
 
     // End turn
-    endBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); if (GAME_ENDED) return; if (playerRole !== currentTurn) return; socket.emit('endTurn'); });
+    endBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); if (GAME_ENDED) return; if (playerRole !== currentTurn) return; try { abilitySel = null; document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active')); document.querySelectorAll('.charCard').forEach(c=>c.style.outline=''); if (typeof clearGhosts==='function') clearGhosts(); } catch(_){} socket.emit('endTurn'); });
 
     // Simple target flow: Fireball / Entangle / Iron Skin (Play → click unit)
     board.addEventListener('mousedown', (e)=>{
@@ -1474,7 +1581,53 @@ playFloat.addEventListener('click', (ev)=>{
       if (window.__lastFullState) updateNameTags(window.__lastFullState);
     });
 
-    socket.on('fullState', full=>{
+    
+    function renderControlFromState(full){
+      try{
+        const box = document.getElementById('controlScoreBox');
+        const p1 = document.getElementById('p1Score');
+        const p2 = document.getElementById('p2Score');
+        const sp1 = document.getElementById('seriesP1');
+        const sp2 = document.getElementById('seriesP2');
+        let overlay = document.getElementById('controlOverlayLayer');
+        let flag = document.getElementById('controlFlag');
+        if (!full || full.mode !== 'control' || !full.control){
+          if (box) box.style.display = 'none';
+          if (flag) flag.style.display = 'none';
+          if (window.__controlOverlays){ window.__controlOverlays.forEach(el=>el.remove()); }
+          window.__controlOverlays = [];
+          return;
+        }
+        if (box) box.style.display = 'block';
+        if (playerRole === 'player2') {
+          if (p1) p1.textContent = String((full.control.progress?.player2 ?? full.control.tally?.player2 ?? 0));
+          if (p2) p2.textContent = String((full.control.progress?.player1 ?? full.control.tally?.player1 ?? 0));
+          if (sp1) sp1.textContent = String(full.control.scores?.player2 ?? 0);
+          if (sp2) sp2.textContent = String(full.control.scores?.player1 ?? 0);
+        } else {
+          if (p1) p1.textContent = String((full.control.progress?.player1 ?? full.control.tally?.player1 ?? 0));
+          if (p2) p2.textContent = String((full.control.progress?.player2 ?? full.control.tally?.player2 ?? 0));
+          if (sp1) sp1.textContent = String(full.control.scores?.player1 ?? 0);
+          if (sp2) sp2.textContent = String(full.control.scores?.player2 ?? 0);
+        }
+        if (window.__controlOverlays){ window.__controlOverlays.forEach(el=>el.remove()); }
+        window.__controlOverlays = [];
+        const tiles = full.control.tiles || [];
+        tiles.forEach(id=>{
+          const p = tilePositions[id]; if (!p) return;
+          const s = toScreen(p.x,p.y);
+          const el = document.createElement('div'); el.className='ghost control'; el.style.left=s.x+'px'; el.style.top=s.y+'px'; el.title=id;
+          overlay.appendChild(el); window.__controlOverlays.push(el);
+        });
+        const anc = full.control.anchor;
+        const pos = tilePositions[anc];
+        if (pos){
+          const s = toScreen(pos.x,pos.y);
+          flag.style.left = s.x+'px'; flag.style.top = s.y+'px'; flag.style.display='block';
+        }
+      }catch(e){/*noop*/}
+    }
+socket.on('fullState', full=>{ renderControlFromState(full);
       window.__lastFullState = full;
       updateNameTags(full);
       positionEnergyBox();
@@ -1521,6 +1674,14 @@ playFloat.addEventListener('click', (ev)=>{
       // Rebuild panels and sync portraits
       refreshPanelsFromChars(serverChars);
       syncTokenPortraits();
+      // Re-apply active state for armed primary after panel rebuild
+      try {
+        if (window.abilitySel && abilitySel.kind === 'primary') {
+          const btn = document.querySelector(`.charCard[data-id="${abilitySel.sourceId}"] .primaryBtn`);
+          if (btn) btn.classList.add('active');
+        }
+      } catch(_){}
+    
       applyRootLocks(full.locks || {});
       applyStatusFX(full.fx || {});
 
@@ -1552,13 +1713,12 @@ playFloat.addEventListener('click', (ev)=>{
     });
 
     socket.on('nextTurn', who=>{
+      // Ensure client UI permits fresh move/action each turn
+      turnState = { usedMovement:false, usedAction:false, cardPlayed:false };
       const wasMine = (playerRole !== who);
       currentTurn = who; setBanner();
 
-      if (wasMine && playedCardThisTurn){
-        drawOneAtEnd();
-        playedCardThisTurn = false;
-      }
+      if (wasMine){ playedCardThisTurn = false; }
 
       moveBuff = { stepsBonus:0, minSteps:0 };
       clearGhosts(); resetTeleport();
@@ -1569,10 +1729,28 @@ playFloat.addEventListener('click', (ev)=>{
       document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
       pendingMoves.clear();
       placeEndButton();
-    });
+    
+      // Disable own ability buttons when it's NOT our turn; enable on our turn
+      try {
+        const ally = document.getElementById('allyPanel');
+        if (ally){
+          const shouldDisable = (playerRole !== currentTurn) || GAME_ENDED;
+          ally.querySelectorAll('.cbtn').forEach(b=> b.disabled = shouldDisable);
+          // Also clear any armed primary visual if turn switched away
+          if (shouldDisable){
+            window.abilitySel = null;
+            ally.querySelectorAll('.primaryBtn').forEach(b=> b.classList.remove('active'));
+            document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+            clearGhosts();
+          }
+        }
+        const enemy = document.getElementById('enemyPanel');
+        if (enemy){ enemy.querySelectorAll('.cbtn').forEach(b=> b.disabled = true); }
+      } catch(_){}
+});
 
     socket.on('move', ({ id, owner, toTile, capturedId })=>{
-      const token = document.querySelector(`.token[data-id="${id}"]`);
+      if (owner === playerRole && moveBuffOnce) { moveBuff.stepsBonus = 0; moveBuffOnce = false; } const token = document.querySelector(`.token[data-id="${id}"]`);
       if (token){
         token.dataset.tile = toTile;
         token.dataset.hasMoved = "true";
@@ -1634,9 +1812,22 @@ playFloat.addEventListener('click', (ev)=>{
     });
 
     socket.on('abilityUsed', ({ kind, sourceId, targetId, name })=>{
-  if (name === 'Voodoo Doll'){
+  
+try {
+  const token = document.querySelector(`.token[data-id="${sourceId}"]`);
+  const who = token ? token.dataset.owner : 'player1';
+  if (name) setDiscardByWho(who, name);
+} catch(e){}
+if (name === 'Voodoo Doll'){
     addOrUpdateStatusLocal(sourceId, 'redirect');
   }
+
+  try {
+    if (window.abilitySel && abilitySel.kind === 'primary') {
+      const btn = document.querySelector(`.charCard[data-id="${abilitySel.sourceId}"] .primaryBtn`);
+      if (btn) btn.classList.add('active');
+    }
+  } catch(_){}
 });
 
         socket.on('insufficientEnergy', ({ card, have, required })=>{ flashEnergyNotEnough(); });
@@ -1645,7 +1836,7 @@ socket.on('cardRevealed', ({ who, type })=>{ setDiscardByWho(who, type); });
 
     socket.on('cardPlayed', ({ type, tile, who, owner, stepsBonus, minSteps, targetId })=>{
       if (who === playerRole){
-        if (type === 'Sprint') moveBuff.stepsBonus = stepsBonus ?? (moveBuff.stepsBonus||0)+1;
+        if (type === 'Sprint') moveBuff.stepsBonus = stepsBonus ?? (moveBuff.stepsBonus||0)+1; moveBuffOnce = true;
         if (type === 'Dash')     moveBuff.stepsBonus = stepsBonus ?? (moveBuff.stepsBonus||0)+2;
         if (type === 'Blink')    moveBuff.minSteps   = Math.max(moveBuff.minSteps||0, minSteps ?? 2);
       }
@@ -1738,6 +1929,7 @@ function updateEntangleOverlays(charsState){
       const uiHit = e.target.closest('#end-turn, .charCard, #hand, .cbtn, .primaryBtn, .specialBtn, .card, button');
       if (uiHit && !e.target.closest('.token')){
         window.abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
         document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
         if (typeof clearGhosts === 'function') clearGhosts();
         return; // do not place
@@ -1779,7 +1971,7 @@ function updateEntangleOverlays(charsState){
           const need = (CARD_COST['HealingPetal']||4);
           if (myEnergy() < need){ flashEnergyNotEnough && flashEnergyNotEnough(); return; }
         }
-        socket.emit('playCard', { type:'BlossomWall', tile: snap.id, origin:'blossom' });
+        socket.emit('playCard', { type:'BlossomWall', tile: snap.id, origin:'blossom', sourceId: (abilitySel && abilitySel.sourceId) });
       }
       applyBlossomWallLocal(snap.id);
 
@@ -1836,5 +2028,93 @@ document.addEventListener('click', (ev)=>{
 
 </script>
 
+<script>
+/* === Texture Atlas (4x6 cells from a 1024x1536 image; one full cell per hex) === */
+(function(){
+  const ATLAS_SRC  = 'assets/stone_atlas.png';  // 1024×1536
+  const ATLAS_COLS = 4, ATLAS_ROWS = 6;
+
+  // Room-based deterministic seed
+  const params = new URLSearchParams(location.search);
+  const ROOMID = (typeof ROOM !== 'undefined' && ROOM) ? ROOM : (params.get('room') || 'default');
+  const SEED   = hashString(ROOMID + '@tex@v3');
+
+  function applyAtlas(){
+    const tiles = document.querySelectorAll('#board .tile');
+    tiles.forEach((tile, i) => {
+      const tw = tile.clientWidth  || parseInt(getComputedStyle(tile).width)  || 112;
+      const th = tile.clientHeight || parseInt(getComputedStyle(tile).height) || 108;
+      const bgW = tw * ATLAS_COLS;
+      const bgH = th * ATLAS_ROWS;
+      const pick = pickIndexFor(tile.dataset.id || String(i), SEED, ATLAS_COLS * ATLAS_ROWS);
+      const col  = pick % ATLAS_COLS;
+      const row  = Math.floor(pick / ATLAS_COLS);
+      tile.style.setProperty('--atlas-w', bgW + 'px');
+      tile.style.setProperty('--atlas-h', bgH + 'px');
+      tile.style.setProperty('--atlas-x', -(col * tw) + 'px');
+      tile.style.setProperty('--atlas-y', -(row * th) + 'px');
+      tile.style.backgroundImage = `url(${ATLAS_SRC})`;
+      tile.style.backgroundColor = 'transparent';
+      tile.style.backgroundOrigin = 'border-box';
+      tile.style.backgroundRepeat = 'no-repeat';
+    });
+  }
+
+  window.addEventListener('load', applyAtlas);
+  window.addEventListener('resize', () => requestAnimationFrame(applyAtlas));
+
+  function hashString(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;}
+  function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  function pickIndexFor(id, seed, total){const rnd=mulberry32((hashString(String(id))^seed)>>>0);return Math.floor(rnd()*total)%total;}
+})();
+</script>
+
+<script>
+/* DON_TAPHEAL_TOGGLE */
+(function(){
+  if (window.__DON_TAPHEAL__) return; window.__DON_TAPHEAL__ = true;
+  function wire(){
+    document.querySelectorAll('.charCard').forEach(card=>{
+      const nameEl = card.querySelector('.charName'); const name = nameEl ? nameEl.textContent.trim() : '';
+      if (name !== 'Don Atore') return;
+      const id = card.dataset.id; const btn = card.querySelector('.cbtn.primaryBtn'); if (!btn) return;
+      btn.addEventListener('mousedown', function(e){
+        try{
+          if (playerRole !== currentTurn || GAME_ENDED) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+          const role = getRoleState(id); const meta = getMeta(role, name);
+          if (!meta || !meta.primary || meta.primary.type !== 'tapHeal') return;
+          e.preventDefault(); e.stopImmediatePropagation();
+          const on = !(window.abilitySel && window.abilitySel.sourceId === id && window.abilitySel.kind === 'primary');
+          if (on){
+            window.abilitySel = { sourceId:id, range: meta.primary.range || 1, kind: 'primary' };
+            btn.classList.add('active');
+            try{
+              const tok = document.querySelector(`.token[data-id="${id}"]`);
+              const tile = tok ? tok.dataset.tile : null;
+              if (tile && typeof neighbors === 'function'){
+                const area = new Set([tile, ...neighbors(tile)]);
+                highlightSet(area, 'attack');
+              }
+            }catch(_){}
+          } else {
+            window.abilitySel = null;
+            btn.classList.remove('active');
+            try{ clearGhosts(); }catch(_){}
+          }
+        }catch(_){}
+      }, true);
+    });
+  }
+  // Wire on initial render and after any roster refresh
+  wire();
+  if (!window.__DON_TAPHEAL_OBS__){
+    window.__DON_TAPHEAL_OBS__ = new MutationObserver(()=> wire());
+    window.__DON_TAPHEAL_OBS__.observe(document.body, { childList:true, subtree:true });
+  }
+})();
+</script>
+
+  <script src="/js/geometry.js"></script>
+  <script src="/js/effects.js"></script>
 </body>
 </html>

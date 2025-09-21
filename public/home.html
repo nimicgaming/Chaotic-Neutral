@@ -33,7 +33,15 @@
     <header>
       <h1>Chaotic Neutral</h1>
       <button id="quickBtn">Quick Match</button>
-    </header>
+    
+      <div style="display:flex;gap:12px;align-items:center;">
+        <label for="mode" style="margin:0;font-weight:700;">Game Mode</label>
+        <select id="mode">
+          <option value="standard">Standard</option>
+          <option value="control">Control Points</option>
+        </select>
+      </div>
+</header>
 
     <div class="grid">
       <div class="card">
@@ -78,7 +86,8 @@
             <label>Support</label>
             <select id="support">
   <option value="death_blossom" selected>Death Blossom</option>
-</select>
+
+            <option value="don_atore">Don Atore</option></select>
           </div>
         </div>
 
@@ -102,6 +111,9 @@
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
+    const modeEl = document.getElementById('mode');
+    const savedMode = sessionStorage.getItem('cn_mode') || localStorage.getItem('cn_mode') || 'standard';
+    if (modeEl) modeEl.value = savedMode;
 
     const roomEl = document.getElementById('room');
     const nameEl = document.getElementById('player');
@@ -156,7 +168,9 @@
       if (!room){ showToast('Enter a room code.'); return; }
       const heroes = heroesFromForm();
       persist(name, room, heroes);
-      socket.emit('lobby:host', { room, name, heroes });
+      const mode = modeEl?.value || 'standard';
+      sessionStorage.setItem('cn_mode', mode); localStorage.setItem('cn_mode', mode);
+      socket.emit('lobby:host', { room, name, heroes, mode });
     });
 
     // Join: server will emit lobby:start once both present
@@ -166,7 +180,9 @@
       if (!room){ showToast('Enter a room code.'); return; }
       const heroes = heroesFromForm();
       persist(name, room, heroes);
-      socket.emit('lobby:join', { room, name, heroes });
+      const mode = modeEl?.value || 'standard';
+      sessionStorage.setItem('cn_mode', mode); localStorage.setItem('cn_mode', mode);
+      socket.emit('lobby:join', { room, name, heroes, mode });
     });
 
     // Quick match: server pairs and emits match:found
@@ -174,7 +190,9 @@
       const heroes = heroesFromForm();
       const name = (nameEl.value.trim() || 'Player').slice(0,18);
       persist(name, '', heroes);
-      socket.emit('queue:quickmatch', { name, heroes });
+      const mode = modeEl?.value || 'standard';
+      sessionStorage.setItem('cn_mode', mode); localStorage.setItem('cn_mode', mode);
+      socket.emit('queue:quickmatch', { name, heroes, mode });
       logEl.textContent = 'Searching for an opponent…';
       btnQuick.disabled = true;
     });
@@ -190,18 +208,18 @@
     socket.on('room:full', ()=> showToast('Room is full.'));
 
     // Start game (both flows: private lobby + quickmatch)
-    socket.on('lobby:start', ({ room })=>{
+    socket.on('lobby:start', ({ room, mode })=>{ const md = mode || (modeEl?.value || savedMode || 'standard'); sessionStorage.setItem('cn_mode', md); localStorage.setItem('cn_mode', md);
       const heroes = JSON.parse(sessionStorage.getItem('cn_roster') || localStorage.getItem('cn_roster') || '[]');
       const name = sessionStorage.getItem('cn_name') || localStorage.getItem('cn_name') || '';
       sessionStorage.setItem('cn_room', room);
       localStorage.setItem('cn_room', room);
       // navigate
-      location.href = `/game?room=${encodeURIComponent(room)}`;
+      location.href = `/game?room=${encodeURIComponent(room)}&mode=${encodeURIComponent(sessionStorage.getItem('cn_mode')||'standard')}`;
     });
-    socket.on('match:found', ({ room })=>{
+    socket.on('match:found', ({ room, mode })=>{ const md = mode || (modeEl?.value || savedMode || 'standard'); sessionStorage.setItem('cn_mode', md); localStorage.setItem('cn_mode', md);
       sessionStorage.setItem('cn_room', room);
       localStorage.setItem('cn_room', room);
-      location.href = `/game?room=${encodeURIComponent(room)}`;
+      location.href = `/game?room=${encodeURIComponent(room)}&mode=${encodeURIComponent(sessionStorage.getItem('cn_mode')||'standard')}`;
     });
   </script>
 
@@ -865,7 +883,17 @@ const DESC = {
       "Nectar of Life: Heal 2 (r2).",
       "Healing Blossom: Deploy a healing blossom whose pink petals heal for 1 hp and green center heals for 2 hp per turn. Heals last for 2 rounds and only applies to allies."
     ]
-  }
+  },
+"Don Atore": {
+  role: "support",
+  img: "assets/Character Images/Don_Atore.png",
+  lines: [
+    "HP: 12  MVMT: 2  SEC: 4",
+    "Blood Donation: heal ally 1 within r1 (0 energy), Don loses same amount.",
+    "Replenish: self-heal 5 (cost 4).",
+    "Passive — Vital Flow: +2 HP at end of each round."
+  ]
+}
 };
 
 function renderRoster(){
