@@ -1,0 +1,744 @@
+/* public/style.css */
+:root{
+  --parchment-1:#cdb594; --parchment-2:#b3916e; --parchment-3:#9b7a5b;
+  --tile-edge:#7b5b45;
+  --ghost-ok:#77d16b; --ghost-block:#a9a9a9; --ghost-enemy:#ffb347; --ghost-attack:#f46a6a; --ghost-pink:#ff7ad1; --ghost-orange:#ffb74d; --ghost-blue:#60a5fa;
+  --panel-border:#ffffff20;
+  --hp-green:#58c26b; --hp-red:#d9534f; --hp-bg:#2a221c;
+  --head-bg:#ffe29a; --head-border:#7a5d12;
+
+  /* flash color defaults (overridden per-event in JS) */
+  --flash-color: transparent;
+}
+*{ box-sizing:border-box; }
+html,body{
+  margin:0; padding:0; width:1920px; height:1080px; overflow:hidden;
+  background:
+    radial-gradient(1200px 900px at 85% 85%, rgba(0,0,0,.25) 0%, transparent 60%),
+    radial-gradient(900px 700px  at 10% 15%, rgba(0,0,0,.22) 0%, transparent 55%),
+    radial-gradient(2000px 1200px at 50% 100%, rgba(0,0,0,.2) 0%, transparent 60%),
+    radial-gradient(2000px 1200px at 50% 0%, rgba(0,0,0,.2) 0%, transparent 60%),
+    radial-gradient(1600px 1100px at 50% 50%, var(--parchment-1) 0%, var(--parchment-2) 58%, var(--parchment-3) 120%);
+  font-family: "Trebuchet MS", system-ui, -apple-system, Segoe UI, Roboto, Arial; color:#efe6d8;
+}
+#board{ position:relative; width:1920px; height:1080px; }
+
+/* tags & turn popup */
+.tag{ position:absolute; top:10px; padding:6px 10px; border-radius:10px;
+  background: rgba(0,0,0,.35); border:1px solid var(--panel-border);
+  font-weight:800; display:none; z-index:5; }
+#label1{ left:12px; } #label2{ right:12px; }
+#turn-popup{ position:absolute; left:50%; top:16px; transform:translateX(-50%);
+  background: linear-gradient(180deg, #2f7d44, #235f34);
+  padding:8px 14px; border-radius:999px; border:1px solid #0e3a1d;
+  font-weight:900; display:none; z-index:6; }
+
+.center-dot{ position:absolute; left:960px; top:490px; transform:translate(-50%,-50%);
+  width:8px; height:8px; border-radius:999px; background:#b85c3a; opacity:.8; z-index:1;}
+
+/* hexes */
+.tile{ position:absolute; width:112px; height:108px; transform:translate(-50%,-50%);
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+  background:
+    repeating-linear-gradient(90deg, transparent 0 10px, #0002 10px 11px),
+    repeating-linear-gradient(0deg, #0002 0 2px, transparent 2px 16px),
+    linear-gradient(180deg, #bf7e3f 0%, #9b6433 100%);
+  border:2px solid var(--tile-edge);
+  box-shadow:0 2px 6px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.25), inset 0 -4px 10px rgba(0,0,0,.25);
+  user-select:none; z-index:2; }
+
+/* ghosts */
+.ghost{ position:absolute; width:112px; height:108px; transform:translate(-50%,-50%);
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+  border:2px dashed rgba(0,0,0,.35); z-index:3; pointer-events:none; opacity:.95;
+  background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-ok) 40%, transparent), transparent); }
+.ghost.block{ background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-block) 45%, transparent), transparent); border-style: solid; }
+.ghost.enemy{ background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-enemy) 55%, transparent), transparent); border-style: dashed; }
+.ghost.attack{ background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-attack) 55%, transparent), transparent); border-style: solid; }
+
+/* tokens */
+.token{ position:absolute; transform:translate(-50%,-50%); width:86px; height:86px; border-radius:50%;
+  display:grid; place-items:center; cursor:grab; z-index:4; font-weight:900;
+  box-shadow: 0 8px 20px rgba(0,0,0,.45); color:#1b1300; border:2px solid rgba(0,0,0,.65); background:#ffe59d; }
+.token[data-owner="player2"]{ background:#ffd1d1; color:#2b0909; }
+.token .portrait{ font-size:36px; line-height:1; }
+.token:active{ cursor:grabbing; }
+
+/* side character columns */
+.panel{
+  position:absolute; top:52px; width:460px; bottom:16px;
+  overflow-y:auto; overflow-x:hidden;
+  background: transparent; border:none; border-radius:0; padding:6px; z-index:25;
+}
+.panel .charCard:last-of-type{ margin-bottom: 0; }
+#allyPanel{ left:8px; } #enemyPanel{ right:8px; }
+
+.charCard{
+  position:relative; /* allow overlay */
+  overflow:hidden;   /* clip the flash overlay */
+  display:grid; grid-template-columns:128px 1fr; gap:16px; align-items:center;
+  background:#f7efe0; color:#2b241e; border:1px solid #5c4634; border-radius:16px;
+  padding:14px; margin-bottom:14px; box-shadow:0 6px 16px rgba(0,0,0,.2);
+  transition: filter .2s ease, background .2s ease, color .2s ease, border-color .2s ease;
+}
+.charCard.dead{
+  background:#4e1414; color:#ffecec; border-color:#b44; filter:saturate(0.7);
+}
+.deadBadge{
+  display:inline-block; margin-left:8px; padding:2px 8px; border-radius:999px;
+  background:#a31616; color:#fff; font-size:12px; font-weight:900;
+}
+.charName{ font-weight:900; font-size:22px; line-height:1.15; margin-bottom:8px; }
+.statLine{ font-size:14px; opacity:.95; display:flex; gap:16px; margin-bottom:8px; }
+.hpbar{ height:16px; border-radius:10px; background:var(--hp-bg); position:relative; overflow:hidden; border:1px solid #0004; margin-top:4px; }
+.hpbar .fill{ position:absolute; left:0; top:0; bottom:0; width:100%;
+  background: linear-gradient(90deg, var(--hp-green), #7ee08f); }
+.hpbar.danger .fill{ background: linear-gradient(90deg, var(--hp-red), #f37c79); }
+.desc{ margin-top:8px; font-size:14px; line-height:1.25; opacity:.92; }
+.btnRow{ display:flex; gap:12px; margin-top:12px; }
+.cbtn{ font-size:13px; padding:8px 12px; border-radius:10px; border:1px solid #333; background:#fff; cursor:pointer; }
+.cbtn[disabled]{ opacity:.45; cursor:not-allowed; }
+
+/* HAND (centered) */
+#handWrap{
+  position:absolute; left:50%; transform:translateX(-50%); bottom:16px;
+  display:block; z-index:30; width:auto;
+}
+.glass{ background: rgba(0,0,0,.35); border:1px solid var(--panel-border); border-radius:12px; }
+#hand{ display:flex; gap:10px; padding:10px; }
+
+.card{
+  width:92px; height:132px; background:#efe6d8; color:#362a1d;
+  border:2px solid #5c4634; border-radius:10px; display:flex; flex-direction:column; justify-content:flex-start;
+  user-select:none; cursor:pointer; transition: transform .15s ease, box-shadow .15s ease, z-index .15s ease;
+  transform-origin: center bottom; text-align:center; padding:6px; position:relative; overflow:hidden;
+}
+.card:hover{ transform: scale(2); z-index:40; box-shadow:0 16px 28px rgba(0,0,0,.55); }
+.has-selected #hand .card:not(.selected):hover{ transform:none; z-index:auto; box-shadow:none; }
+.card.selected{ outline:3px solid #ffd772; transform: scale(2); z-index:40; box-shadow:0 16px 28px rgba(0,0,0,.55); }
+.card.placeholder{ opacity:.15; pointer-events:none; }
+
+.cardHead{
+  background: var(--head-bg);
+  border:1px solid var(--head-border);
+  color:#1e1505;
+  border-radius:8px;
+  padding:6px 6px 8px;
+  margin:-2px -2px 6px;
+  font-weight:900;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+}
+.cardTitle{ display:block; line-height:1.05; font-weight:900; font-size:16px; text-align:center; }
+.playInline{ display:none !important; }
+
+.cardBody {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6px;
+  font-weight: 900;
+  text-align: center;
+  overflow-wrap: break-word;
+
+  padding-bottom: 18px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;}
+.cardBody .desc {
+  font-size: 12px;
+  opacity: .85;
+  line-height: 1.2;
+  margin-top: 4px;
+  white-space: normal;
+}
+
+/* Discard boxes fixed */
+.discardBox{
+  position:absolute; width: 168px; padding:8px; display:grid; grid-template-rows:auto 1fr; gap:6px;
+  pointer-events:none; z-index:31;
+}
+.discardBox .label{ font-size:12px; text-align:center; opacity:.85; }
+.discardBox .slot{
+  height: 220px; display:grid; place-items:center; border-radius:12px; border:1px dashed #ffffff30;
+  background: rgba(0,0,0,.25);
+}
+.discardCard{
+  width: 128px; height: 192px; background:#efe6d8; color:#362a1d;
+  border:2px solid #5c4634; border-radius:10px; display:grid; place-items:center; font-weight:900;
+  text-align:center; padding: 1px; box-shadow:0 8px 16px rgba(0,0,0,.35);
+}
+.discardCard .n{ font-weight:900; }
+.discardCard .d{ font-size:12px; opacity:.8; }
+
+/* Discard positions */
+#discardSelf{ bottom:16px; left: calc(50% + 300px); }
+#discardOther{ top:16px;    left: calc(50% + 300px); }
+
+/* End Turn button */
+#end-turn{
+  position:absolute; bottom:16px; left:16px; padding:10px 14px; border-radius:10px; font-weight:900;
+  background:#ffd772; color:#3a2a12; border:1px solid #7a5d12; z-index:31; cursor:pointer;
+}
+
+/* Game Over overlay */
+#gameover{
+  position:absolute; inset:0; background:rgba(0,0,0,.65); display:none; z-index:50;
+  align-items:center; justify-content:center; text-align:center;
+}
+#gameover .box{
+  background:#1d120b; border:2px solid #e1c07a; padding:28px 36px; border-radius:16px;
+  box-shadow:0 10px 30px rgba(0,0,0,.6);
+}
+#gameover h1{ margin:0 0 12px; font-size:48px; }
+#gameover p{ margin:0; font-size:20px; opacity:.9; }
+
+/* =========================
+   FLASH EFFECTS (cards)
+   ========================= */
+/* ::after hooks kept for compatibility if you trigger .flash-dmg/.flash-heal */
+.charCard::after{
+  content:"";
+  position:absolute; inset:0;
+  background: var(--flash-color, transparent);
+  opacity:0; pointer-events:none;
+}
+@keyframes cn-flash { 0%{opacity:0;} 18%{opacity:.9;} 100%{opacity:0;} }
+.charCard.flash-dmg::after,
+.charCard.flash-heal::after{ animation: cn-flash 520ms ease-out; }
+@media (prefers-reduced-motion: reduce){
+  .charCard.flash-dmg::after,
+  .charCard.flash-heal::after{ animation-duration: 200ms; }
+}
+
+/* --- ultra-simple hit overlay (used by JS-created .hitOverlay element) --- */
+.hitOverlay{
+  position:absolute;
+  inset:0;
+  border-radius:16px;
+  pointer-events:none;
+  z-index:999;
+  animation-name: hitFlash;
+  animation-duration: 1.25s;          /* longer than 1s */
+  animation-timing-function: linear;
+  animation-fill-mode: both;           /* keep first & last frames */
+  will-change: opacity;
+}
+.hitOverlay.dmg { background: rgba(220, 0, 0, 0.58); }
+.hitOverlay.heal{ background: rgba(0, 175, 90, 0.50); }
+
+@keyframes hitFlash {
+  0%   { opacity: 1; }
+  10%  { opacity: 0.95; }
+  85%  { opacity: 0.9; }   /* hold visible most of the time */
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce){
+  .hitOverlay{ animation-duration: 600ms; }
+}
+
+
+/* =========================
+   ENERGY / CARD COST (new)
+   ========================= */
+#energyBox{
+  position:absolute; left:16px; top:10px; 
+  padding:8px 10px; border-radius:12px; background:#2a2019cc; color:#f7efe0;
+  border:1px solid #ffffff22; box-shadow:0 8px 16px rgba(0,0,0,.35); z-index:31;
+
+  width:220px;
+  height:auto;}
+#energyBox .label{ font-weight:900; margin-bottom:6px; }
+.energybar{
+   border-radius:10px; background:#142133; position:relative; overflow:hidden; border:1px solid #0004;
+
+  height:12px;}
+.energybar .fill{
+  position:absolute; left:0; top:0; bottom:0; width:0%;
+  background: linear-gradient(90deg, #4da3ff, #7fc0ff);
+}
+.energyNums{ font-size:12px; margin-top:4px; opacity:.9; }
+
+#energyBox.pulse{ animation: pulseRed .6s ease; }
+@keyframes pulseRed{
+  0%{ box-shadow:0 0 0 rgba(255,0,0,0.0); }
+  30%{ box-shadow:0 0 20px rgba(255,50,50,0.8); }
+  100%{ box-shadow:0 0 0 rgba(255,0,0,0.0); }
+}
+
+/* Card cost pill */
+.card .cardHead{ position:relative; }
+.cardCost{
+  position:absolute; right:4px; top:auto;
+  display:inline-flex; align-items:center; justify-content:center;
+  width:24px; height:24px; border-radius:50%;
+  font-weight:900; font-size:12px; color:#0a1a2e;
+  background:#9ed1ff; border:1px solid #5aa2df; box-shadow:0 2px 6px rgba(0,0,0,.25);
+
+  bottom: 4px;
+  pointer-events: none;}
+
+
+/* rooted/entangled state */
+.token.rooted{ cursor:not-allowed; filter:grayscale(.15) saturate(.9); box-shadow: inset 0 0 0 3px rgba(0,0,0,.35); }
+
+/* Status effect pills */
+.charCard .statusRow{
+  display:flex; gap:6px; margin:6px 0 4px; flex-wrap:wrap; min-height:20px;
+}
+.charCard .statusPill{
+  display:inline-flex; align-items:center; gap:4px;
+  padding:2px 6px; border-radius:999px;
+  border:1px solid #0003; background:#00000020;
+  font-weight:800; font-size:12px; line-height:1;
+}
+.charCard .statusPill .num{ font-variant-numeric: tabular-nums; }
+
+
+/* Card badge anchored to the card (not the head) */
+.card .cardHead{ position: static; }
+\n
+/* Hide scrollbar in left character cards panel */
+.left .cards, .left .card-list, .left .panel, .cardsPane {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+.left .cards::-webkit-scrollbar,
+.left .card-list::-webkit-scrollbar,
+.left .panel::-webkit-scrollbar,
+.cardsPane::-webkit-scrollbar { display: none; }
+
+
+/* Card layout tweaks: name on far left (full-width row), content top-aligned */
+.charCard{ align-items:start; grid-auto-rows: min-content; }
+.charCard .charName{
+  grid-column: 1 / -1;
+  font-weight: 900; font-size: 18px; line-height: 1.1;
+  margin-bottom: 6px;
+}
+.charCard .charBody{ display:flex; flex-direction:column; gap:6px; }
+.charCard .statLine{ display:flex; flex-wrap:wrap; gap:12px; margin:0; }
+.charCard .desc{ margin-top:4px; }
+
+
+/* Compact card spacing; name at top; remove extra gap */
+.charCard{ align-items:start; grid-auto-rows:min-content; }
+.charCard .charBody{ display:flex; flex-direction:column; gap:6px; }
+.charCard .statLine.onlyHp{ margin-bottom:2px; }
+.charCard .desc{ margin-top:2px; display:flex; flex-direction:column; gap:2px; }
+.charCard .desc .descLine{ line-height:1.1; }
+
+
+/* --- Card tighten & visuals (heart HP, bigger desc, top align) --- */
+.charCard{ align-items:start; grid-auto-rows:min-content; padding-top:10px; padding-bottom:10px; }
+.charCard .charPortrait{ align-self:start; }
+.charCard .charBody{ display:flex; flex-direction:column; gap:4px; }
+.charCard .statLine.onlyHp{ margin:0; }
+.charCard .hpbar{ margin-top:2px; }
+.charCard .desc{ margin-top:4px; display:flex; flex-direction:column; gap:2px; }
+.charCard .desc .descLine{ font-size:15px; line-height:1.2; }
+.charCard .hpLine{ display:flex; align-items:center; gap:6px;  font-size:18px; font-weight:900; }
+.charCard .hpIcon{ font-size: 18px; transform: translateY(1px); }
+
+
+/* Move card content even closer to the top edge */
+.charCard{ padding-top:6px; padding-bottom:8px; }
+.charCard .charName{ margin-top:0; margin-bottom:4px; }
+.charCard .charPortrait{ margin-top:0; }
+.charCard .charBody{ gap:3px; }
+.charCard .desc .descLine{ font-size:16px; } /* bump readability */
+
+
+/* Character portrait image styling */
+
+
+.character-portrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 8px;
+}
+
+
+.character-portrait {
+    width: 80px;
+    height: 80px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    border-radius: 8px; /* remove if you want sharp corners */
+    background: #fff;
+}
+
+.character-portrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+
+
+
+
+
+.charPortrait {
+    width: 150px !important;
+    height: 150px !important;
+    overflow: hidden;
+    border-radius: 8px;
+    flex-shrink: 0;
+    margin-left: -10px; /* shift left */
+}
+
+.charPortrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* Healing Petal visuals */
+.blossom-dot{
+  position:absolute; transform:translate(-50%,-50%);
+  width:14px; height:14px; border-radius:999px;
+  background: var(--ghost-ok); border:2px solid #1b4;
+  box-shadow: 0 0 8px rgba(0,0,0,.35); opacity:.95; z-index:3;
+}
+.blossom-petal{
+  position:absolute; transform:translate(-50%,-50%);
+  width:10px; height:10px; border-radius:999px;
+  background:#ff7ac8; border:2px solid #b23686;
+  box-shadow: 0 0 8px rgba(0,0,0,.25); opacity:.95; z-index:3;
+}
+.blossom-ring{
+  position:absolute; transform:translate(-50%,-50%);
+  width:6px; height:6px; border-radius:999px;
+  background:#ffcfe9; border:1px solid #b23686;
+  opacity:.9; z-index:3;
+}
+
+/* --- Heal visuals --- */
+.heal-float{
+  position:absolute;
+  pointer-events:none;
+  left:0; top:0;
+  transform:translate(-50%,-100%);
+  font-weight:700;
+  font-size:14px;
+  color:#1db954;
+  text-shadow:0 1px 0 rgba(0,0,0,.4);
+  opacity:0;
+  animation: healFloatUp 900ms ease-out forwards;
+  z-index: 10;
+}
+@keyframes healFloatUp{
+  0%{ opacity:0; transform:translate(-50%,-60%); }
+  10%{ opacity:1; }
+  100%{ opacity:0; transform:translate(-50%,-140%); }
+}
+.token.heal-pulse{
+  box-shadow: 0 0 0 0 rgba(29,185,84,.6);
+  animation: healPulse 700ms ease-out 1;
+}
+@keyframes healPulse{
+  0%{ box-shadow: 0 0 0 0 rgba(29,185,84,.6); }
+  100%{ box-shadow: 0 0 0 14px rgba(29,185,84,0); }
+}
+
+/* --- Healing Petal badges on character cards --- */
+.charCard{ position: relative; } /* ensure positioning context */
+.heal-badge{
+  position:absolute;
+  top:6px; right:8px;
+  font-size:18px;
+  line-height:1;
+  filter: drop-shadow(0 1px 0 rgba(0,0,0,.5));
+  pointer-events:none;
+  user-select:none;
+}
+.heal-badge.center{ /* green heart for center tile */ }
+.heal-badge.petal{ /* pink heart for petal tiles */ }
+
+
+/* ===== Tile ring highlight (green) ===== */
+.tileRing{
+  position:absolute; width:112px; height:108px; transform:translate(-50%,-50%);
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+  pointer-events:none;
+  /* Full hex ring using inset box-shadow (respects clip-path) */
+  box-shadow: inset 0 0 0 4px var(--ghost-ok);
+  background: transparent;
+  z-index: 100;
+}
+
+
+/* === High-visibility click ring (hex) === */
+.ghost.ring{
+  background: transparent !important;
+  border: 4px solid var(--ghost-ok) !important;
+  border-style: solid !important;
+  z-index: 41 !important; /* above tokens (4) and cards */
+  opacity: 1 !important;
+}
+
+
+/* Blossom walls (green, passable) */
+.ghost.block.blossom{
+  background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-ok) 65%, transparent), transparent) !important;
+  border: 3px solid var(--ghost-ok) !important;
+  box-shadow: 0 0 10px var(--ghost-ok), inset 0 0 0 2px var(--ghost-ok);
+  opacity: 1;
+
+  z-index: 42 !important;
+  pointer-events: none !important;
+}
+
+
+/* Blossom PINK ring (passable) */
+.ghost.block.blossom-pink{
+  background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-pink) 65%, transparent), transparent) !important;
+  border: 3px solid var(--ghost-pink) !important;
+  box-shadow: 0 0 10px var(--ghost-pink), inset 0 0 0 2px var(--ghost-pink);
+  opacity: 1;
+  z-index: 42 !important;
+  pointer-events: none !important;
+}
+
+/* Enemy blossom center (orange) */
+.ghost.block.enemy-blossom{
+  background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-orange) 65%, transparent), transparent) !important;
+  border: 3px solid var(--ghost-orange) !important;
+  box-shadow: 0 0 10px var(--ghost-orange), inset 0 0 0 2px var(--ghost-orange);
+  z-index: 42 !important;
+  pointer-events: none !important;
+}
+/* Enemy blossom ring (blue) */
+.ghost.block.enemy-blossom-pink{
+  background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-blue) 65%, transparent), transparent) !important;
+  border: 3px solid var(--ghost-blue) !important;
+  box-shadow: 0 0 10px var(--ghost-blue), inset 0 0 0 2px var(--ghost-blue);
+  z-index: 42 !important;
+  pointer-events: none !important;
+}
+
+
+/* === Top-layer green hover hex (always above all overlays) === */
+#hoverTileGreen{
+  position:absolute; width:112px; height:108px; transform:translate(-50%,-50%);
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+  pointer-events:none;
+  z-index: 1000;
+  border: 4px solid var(--ghost-ok);
+  background: color-mix(in srgb, var(--ghost-ok) 25%, transparent);
+  box-shadow: 0 0 18px var(--ghost-ok), inset 0 0 0 2px var(--ghost-ok);
+  opacity: 1;
+}
+
+#playFloat.disabled{ opacity:.45; filter:grayscale(0.6); cursor:not-allowed; }
+#playFloat.disabled:hover{ transform: translate(-50%, -8px) scale(1); }
+/* Image-based hand cards */
+.card.imgcard{ padding:0; background:transparent; border:none; }
+.card.imgcard img.cardImg{ width:100%; height:100%; object-fit:cover; display:block; border-radius:10px; }
+
+
+/* Discard pile uses PNG cards, constrained to the slot */
+.discardBox .discardCard{ width:100%; height:auto; aspect-ratio: 2.5 / 3.5; border-radius:10px; overflow:hidden; background:#0001; border:2px solid #5c4634; box-shadow:0 6px 12px rgba(0,0,0,.35); }
+.discardImg{ width:100%; height:100%; object-fit:cover; display:block; border-radius:8px; }
+
+
+/* Wall tile uses icon image but remains a 'ghost' block */
+.ghost.block.wall{opacity:0 !important; background:none !important;}
+
+/* Layer for persistent wall overlays */
+#wallOverlayLayer{
+  position:absolute; inset:0;
+  pointer-events:none;
+  z-index:5; /* below tokens (4->10), but above tiles */
+}
+.wall-overlay{
+  position:absolute;
+  width:112px; height:108px;
+  transform: translate(-50%,-50%);
+  pointer-events:none;
+  background: url('/assets/Icons/Wall.png') center / 68% no-repeat;
+}
+
+/* Control Points HUD */
+#controlScoreBox{ position:absolute; top:10px; left:50%; transform:translateX(-50%); padding:8px 12px; z-index:55; }
+#controlScoreBox .label{ font-weight:900; margin-bottom:4px; }
+#controlScoreBox .score{ font-size:18px; letter-spacing:1px; }
+.ghost.control{ background: radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--ghost-blue) 55%, transparent), transparent); border:3px solid var(--ghost-blue); opacity:1; z-index:42; pointer-events:none; }
+#controlFlag{ position:absolute; transform:translate(-50%,-60%); z-index:43; pointer-events:none; }
+#controlFlagSVG{ width:48px; height:64px; display:block; filter: drop-shadow(0 3px 6px rgba(0,0,0,.55)); }
+
+/* === Control Points HUD: bigger & shifted left === */
+#controlScoreBox{
+  top: 34px;
+  left: calc(50% - 400px);
+  transform: none;
+  padding: 18px 22px;
+}
+#controlScoreBox .label{ font-size: 18px; }
+#controlScoreBox .score{ font-size: 36px; letter-spacing: 1.75px; }
+
+
+/* Top-center series (round wins) scoreboard */
+#seriesScoreTop{
+  position:absolute;
+  top:4px;
+  left:50%;
+  transform:translateX(-50%);
+  padding:6px 12px;
+  border-radius:12px;
+  background: rgba(0,0,0,.35);
+  border:1px solid var(--panel-border);
+  font-weight:900;
+  font-size:22px;
+  z-index:60;
+  pointer-events:none;
+}
+#seriesScoreTop span{ display:inline-block; min-width:24px; text-align:center; }
+
+
+/* === Stack Y over X (display-only) ===
+   Y = #seriesScoreTop  (best-of-5)
+   X = #controlScoreBox (round tally to 10)
+   No element removal, server unchanged. */
+#seriesScoreTop{
+  position: absolute !important;
+  left: 16px !important;
+  top: 10px !important;
+  transform: none !important;
+  z-index: 100 !important;
+}
+#controlScoreBox{
+  position: absolute !important;
+  left: 16px !important;
+  top: 56px !important;   /* directly under Y */
+  transform: none !important;
+  z-index: 99 !important;
+}
+
+
+/* === Move stacked score boxes into the empty space right of the left panel === */
+#seriesScoreTop{
+  position:absolute !important;
+  left: calc(8px + 460px + 16px) !important; /* panel left + width + gap */
+  top: 10px !important;
+  transform: none !important;
+  z-index: 100 !important;
+}
+#controlScoreBox{
+  position:absolute !important;
+  left: calc(8px + 460px + 16px) !important; /* align with Y */
+  top: 64px !important;                      /* directly beneath Y */
+  transform: none !important;
+  z-index: 99 !important;
+}
+
+
+/* Top series score label/score layout */
+#seriesScoreTop .label{ font-size:12px; text-align:center; opacity:.85; padding:4px 8px 0; }
+#seriesScoreTop .score{ font-weight:900; font-size:22px; text-align:center; padding:4px 10px 8px; }
+
+
+/* === Size & spacing for stacked score boxes (no overlap) === */
+:root{
+  --scoreStackLeft: calc(8px + 460px + 16px); /* left panel left + width + gap */
+  --seriesBoxTop: 10px;
+  --seriesBoxHeight: 88px; /* height of top box Y */
+}
+
+#seriesScoreTop{
+  position:absolute !important;
+  left: var(--scoreStackLeft) !important;
+  top: var(--seriesBoxTop) !important;
+  min-width: 170px;
+  height: var(--seriesBoxHeight);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  padding: 6px 14px;
+  z-index: 100 !important;
+}
+#seriesScoreTop .label{ font-size:13px; text-align:center; opacity:.9; }
+#seriesScoreTop .score{ font-weight:900; font-size:26px; line-height:1; }
+
+#controlScoreBox{
+  position:absolute !important;
+  left: var(--scoreStackLeft) !important;
+  top: calc(var(--seriesBoxTop) + var(--seriesBoxHeight) + 10px) !important; /* sit below Y with gap */
+  min-width: 120px;
+  padding: 4px 10px;
+  z-index: 99 !important;
+}
+#controlScoreBox .score{ font-size:18px; line-height:1; }
+
+
+/* === Bigger numbers in both score boxes === */
+#seriesScoreTop .score{ font-size: 32px !important; line-height: 1.05; }
+#controlScoreBox .score{ font-size: 24px !important; line-height: 1.05; }
+
+
+/* Center the bottom (round tally) box text */
+#controlScoreBox{
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+#controlScoreBox .score{
+  width: 100% !important;
+  text-align: center !important;
+}
+
+
+/* ===== Adjust score boxes: move down & center bottom under top ===== */
+:root{
+  --seriesBoxTop: 20px;          /* was 10px -> move both boxes down a bit */
+  --seriesBoxWidth: 200px;       /* explicit width for top box */
+  --controlBoxWidth: 140px;      /* explicit width for bottom box */
+  --scoreGap: 14px;              /* vertical gap between boxes */
+}
+
+#seriesScoreTop{
+  width: var(--seriesBoxWidth) !important;
+  top: var(--seriesBoxTop) !important;
+}
+
+#controlScoreBox{
+  width: var(--controlBoxWidth) !important;
+  top: calc(var(--seriesBoxTop) + var(--seriesBoxHeight) + var(--scoreGap)) !important;
+  left: calc(var(--scoreStackLeft) + (var(--seriesBoxWidth) - var(--controlBoxWidth)) / 2) !important; /* center under top */
+}
+
+/* --- Turn icon badges on character cards --- */
+.charCard { position: relative; }
+.charCard .turnIcons{
+  position:absolute;
+  top:6px;
+  right:6px;
+  display:flex;
+  gap:6px;
+  pointer-events:none; /* purely indicative */
+}
+.charCard .turnIcons .icon{
+  width:20px; height:20px; line-height:20px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:14px;
+  background:rgba(0,0,0,.35);
+  border-radius:50%;
+  color:#fff;
+  text-shadow:0 1px 2px #000;
+}
+
+
+/* texture atlas hook for tiles */
+#board .tile{
+  background-repeat: no-repeat;
+  background-size: var(--atlas-w, auto) var(--atlas-h, auto);
+  background-position: var(--atlas-x, 0) var(--atlas-y, 0);
+  image-rendering: auto;
+}
+
+.cbtn.active{ outline:2px solid #ff4343; filter:brightness(1.08); }

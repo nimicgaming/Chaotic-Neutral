@@ -1,0 +1,2120 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chaotic Neutral — Game</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    /* Minimal styles for the floating Play button (most styles live in style.css) */
+    #playFloat {
+      position:absolute; display:none; z-index:60;
+      transform: translate(-50%, -8px);
+      padding:6px 10px; border-radius:999px; border:1px solid #7a5d12;
+      background:#ffd772; color:#2a1b00; font-weight:900; font-size:12px;
+      box-shadow:0 8px 18px rgba(0,0,0,.35);
+      cursor:pointer; pointer-events:auto;
+    }
+  
+/* === Entangle overlay (vine) === */
+
+.token.entangled::after{
+  content:"";
+  position:absolute; inset:-4px;
+  background: url('/assets/Icons/Vines.png') center/contain no-repeat;
+  pointer-events:none;
+  opacity:0.95;
+  animation: vineSway 2.5s ease-in-out infinite;
+}
+@keyframes vineSway{
+  0%{ transform: rotate(0deg) scale(1); }
+  50%{ transform: rotate(1deg) scale(1.02); }
+  100%{ transform: rotate(0deg) scale(1); }
+}
+
+</style>
+
+  <style>
+    .top-home-btn{
+      position:fixed; left:381px; top:8px; z-index:1000;
+      background:#2a2019; color:#ffe29a; border:1px solid #ffffff22;
+      padding:6px 10px; border-radius:10px; font:600 14px system-ui; text-decoration:none;
+      box-shadow:0 2px 6px rgba(0,0,0,.3);
+    }
+    .top-home-btn:hover{ filter:brightness(1.1); }
+  </style>
+
+  <style>
+    /* Parchment full-viewport background */
+    html, body { height: 100%; }
+    html { background: #111 url('assets/background.png') center / cover no-repeat fixed !important; }
+    body { background: transparent !important; }
+  </style>
+</head>
+<body>
+  <a id="btnHome" href="/home" class="top-home-btn">⟵ Home</a>
+  <div id="seriesScoreTop" class="glass"><div class="label">Control Points</div><div class="score"><span id="seriesP1">0</span> — <span id="seriesP2">0</span></div></div>
+  <div id="board">
+    <div class="center-dot"></div>
+
+    <div id="label1" class="tag" style="display:none"></div>
+    <div id="label2" class="tag" style="display:none"></div>
+    <div id="turn-popup">Your Turn</div>
+
+    <div id="allyPanel" class="panel"></div>
+    <div id="enemyPanel" class="panel"></div>
+
+    <!-- [ENERGY] Player energy bar -->
+    <div id="energyBox" class="glass">
+      <div class="label">Energy</div>
+      <div class="energybar"><div class="fill" style="width:0%"></div></div>
+      <div class="energyNums"><span id="energyVal">0</span> / <span id="energyMax">10</span></div>
+    </div>
+
+    <div id="controlScoreBox" class="glass" style="display:none">
+      <div class="score"><span id="p1Score">0</span> — <span id="p2Score">0</span></div>
+    </div>
+
+
+    <!-- Hand: centered at bottom -->
+    <div id="handWrap">
+      <div id="hand" class="glass"></div>
+    </div>
+
+    <!-- Discards -->
+    <div id="discardSelf" class="glass discardBox">
+      <div class="label">Your Discard</div>
+      <div class="slot" id="discardSelfSlot">—</div>
+    </div>
+    <div id="discardOther" class="glass discardBox">
+      <div class="label">Opponent Discard</div>
+      <div class="slot" id="discardOtherSlot">—</div>
+    </div>
+
+    <button id="end-turn">End Turn</button>
+
+    <div id="gameover">
+      <div class="box">
+        <h1 id="wintext">Game Over</h1>
+        <p id="winsub">Winner: —</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Play button (positioned by JS just above the selected card) -->
+  <button id="playFloat">Play</button>
+
+  <script src="/socket.io/socket.io.js">
+
+// === Swap interaction (client) ===
+window.canSwap = false;
+window.swapSourceId = null;
+
+// Click any token to be swap target when canSwap is active
+document.addEventListener('click', (e) => {
+  const tokenEl = e.target.closest('.token');
+  if (!tokenEl) return;
+  const targetId = tokenEl.dataset.id;
+  if (!window.canSwap || !window.swapSourceId || !targetId || targetId === window.swapSourceId) return;
+  try {
+    if (typeof socket !== 'undefined') {
+      socket.emit('useSpecial', { sourceId: window.swapSourceId, targetId });
+    }
+  } finally {
+    window.canSwap = false;
+    window.swapSourceId = null;
+  }
+});
+
+</script>
+  <script>
+    /* --------- Room / join wiring --------- */
+    const params = new URLSearchParams(location.search);
+    const ROOM = params.get('room') || sessionStorage.getItem('cn_room') || localStorage.getItem('cn_room');
+    if (!ROOM){ location.href = '/home'; }
+    const PLAYER_NAME = sessionStorage.getItem('cn_name') || localStorage.getItem('cn_name') || '';
+    const HEROES = JSON.parse(sessionStorage.getItem('cn_roster') || localStorage.getItem('cn_roster') || '[]');
+    const MODE = (new URLSearchParams(location.search).get('mode') || sessionStorage.getItem('cn_mode') || localStorage.getItem('cn_mode') || 'standard');
+    /* hide control UI when not in control mode */
+    if (MODE !== 'control') {
+      const top = document.getElementById('seriesScoreTop'); if (top) top.remove();
+      const box = document.getElementById('controlScoreBox'); if (box) box.remove();
+    }
+
+    sessionStorage.setItem('cn_mode', MODE); localStorage.setItem('cn_mode', MODE);
+
+    const socket = io();
+    socket.emit('game:join', { room: ROOM, name: PLAYER_NAME, heroes: HEROES, mode: MODE });
+
+    /* ---------- DOM ---------- */
+    const board   = document.getElementById('board');
+    const wallOverlayLayer = document.createElement('div');
+    wallOverlayLayer.id = 'wallOverlayLayer';
+    board.appendChild(wallOverlayLayer);
+
+    // Control Points overlay + flag
+    const controlOverlayLayer = document.createElement('div');
+    controlOverlayLayer.id = 'controlOverlayLayer';
+    board.appendChild(controlOverlayLayer);
+    const controlFlag = document.createElement('div');
+    controlFlag.id = 'controlFlag';
+    controlFlag.innerHTML = '<svg id="controlFlagSVG" viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg">\
+  <rect x="6" y="6" width="5" height="52" fill="#171717" rx="2" />\
+  <path d="M12 10 L44 20 L12 30 Z" fill="#e33" stroke="#b00" stroke-width="2" />\
+</svg>';
+    controlFlag.style.display = 'none';
+    board.appendChild(controlFlag);
+
+    const wallOverlays = new Map();
+
+    const hand    = document.getElementById('hand');
+    const endBtn  = document.getElementById('end-turn');
+    const banner  = document.getElementById('turn-popup');
+    const label1  = document.getElementById('label1');
+    const label2  = document.getElementById('label2');
+    const allyPanel  = document.getElementById('allyPanel');
+    const enemyPanel = document.getElementById('enemyPanel');
+    const gameover  = document.getElementById('gameover');
+    const wintext   = document.getElementById('wintext');
+    const winsub    = document.getElementById('winsub');
+    const discardSelfSlot  = document.getElementById('discardSelfSlot');
+    const discardOtherSlot = document.getElementById('discardOtherSlot');
+    const playFloat = document.getElementById('playFloat');
+
+    let GAME_ENDED = false;
+
+    /* ---------- UI placement helpers ---------- */
+    function placeEndButton(){
+      const boardRect = board.getBoundingClientRect();
+      const handRect  = hand.getBoundingClientRect();
+      const btnRect   = endBtn.getBoundingClientRect();
+      const gap = 16;
+      let left = (handRect.left - boardRect.left) - btnRect.width - gap;
+      if (left < 12) left = 12;
+      endBtn.style.left = left + 'px';
+    }
+    window.addEventListener('resize', ()=>{
+      placeEndButton();
+      if (selectedCard) positionPlayFloat(selectedCard);
+    });
+    function positionEnergyBox(){
+      const ally = document.getElementById('allyPanel');
+      const energy = document.getElementById('energyBox');
+      const handWrap = document.getElementById('handWrap');
+      if (!ally || !energy) return;
+      const ar = ally.getBoundingClientRect();
+      const hr = handWrap ? handWrap.getBoundingClientRect() : { top: window.innerHeight };
+      const ebh = energy.offsetHeight || 66;
+
+      // Place to the right of the left panel, further down (~78%)
+      const left = Math.round(ar.right + 10);
+      let top = Math.round(ar.top + ar.height * 0.655);
+
+      // Clamp so we don't overlap the hand/cards
+      const maxTop = hr.top - ebh - 16;
+      const minTop = ar.top + 20;
+      top = Math.max(minTop, Math.min(maxTop, top));
+
+      energy.style.left = left + 'px';
+      energy.style.top  = top + 'px';
+      energy.style.bottom = 'auto';
+    }
+    window.addEventListener('resize', positionEnergyBox);
+
+
+    /* ---------- Board geometry ---------- */
+    const centerX = 960, centerY = 540 - 50;
+    const hexR = 58, hexW = Math.sqrt(3) * hexR, hexH = 2 * hexR, vSpace = 0.75 * hexH;
+    const rows = [
+      { label:'A', count:4 }, { label:'B', count:5 }, { label:'C', count:6 },
+      { label:'D', count:7 }, { label:'E', count:8 }, { label:'F', count:7 },
+      { label:'G', count:6 }, { label:'H', count:5 }, { label:'I', count:4 }
+    ];
+    const centerRow = Math.floor(rows.length/2);
+    const tilePositions = {};
+    rows.forEach((row, ri) => {
+      const y = centerY + (ri - centerRow) * vSpace;
+      const half = (row.count - 1) * hexW / 2;
+      for (let i = 0; i < row.count; i++) {
+        const x = centerX - half + i * hexW;
+        const id = `${row.label}${i+1}`;
+        tilePositions[id] = { x, y };
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.style.left = `${x}px`;
+        tile.style.top  = `${y}px`;
+        tile.dataset.id = id;
+        board.appendChild(tile);
+      }
+    });
+
+    /* ---------- Adjacency ---------- */
+    const adjacency = {};
+    const dHoriz = hexW, dVert = vSpace, dDiag = Math.hypot(hexW/2, vSpace);
+    const targets = [dHoriz, dVert, dDiag], tol = 0.18;
+    (function buildAdj(){
+      const ids = Object.keys(tilePositions);
+      for (const id of ids){
+        const a = tilePositions[id];
+        const n = [];
+        for (const id2 of ids){
+          if (id2 === id) continue;
+          const b = tilePositions[id2];
+          const dist = Math.hypot(a.x - b.x, a.y - b.y);
+          for (const t of targets){ if (Math.abs(dist - t) <= t*tol){ n.push([id2, dist]); break; } }
+        }
+        n.sort((p,q)=>p[1]-q[1]);
+        adjacency[id] = n.slice(0,6).map(p=>p[0]);
+      }
+    })();
+    const neighbors = id => adjacency[id] ?? [];
+
+    function areaWithin(start, range=1, blockedSet){
+      const seen = new Set([start]);
+      const q = [[start,0]];
+      const out = new Set();
+      while(q.length){
+        const [cur, d] = q.shift();
+        if (d > range) continue;
+        if (d>0) out.add(cur);
+        if (d === range) continue;
+        for (const n of neighbors(cur)){
+          if (blockedSet && blockedSet.has(n)) continue;
+          if (!seen.has(n)){ seen.add(n); q.push([n, d+1]); }
+        }
+      }
+      return [...out];
+    }
+    function reachable(start, steps=1, blockedSet){ return areaWithin(start, steps, blockedSet); }
+
+    function shortestDistanceWithWalls(start, goal, blockedSet){
+      if (start === goal) return 0;
+      const seen = new Set([start]);
+      const q = [[start,0]];
+      while(q.length){
+        const [cur,d] = q.shift();
+        for (const nxt of neighbors(cur)){
+          if (blockedSet && blockedSet.has(nxt)) continue;
+          if (seen.has(nxt)) continue;
+          if (nxt === goal) return d+1;
+          seen.add(nxt); q.push([nxt, d+1]);
+        }
+      }
+      return Infinity;
+    }
+
+    /* ---------- Turn / Role ---------- */
+    let playerRole = null;
+    let currentTurn = 'player1';
+    let turnState = { usedMovement:false, usedAction:false, cardPlayed:false };
+    function setBanner(){ banner.style.display = (!GAME_ENDED && playerRole === currentTurn) ? 'block' : 'none'; }
+
+    const mirror = (x,y)=>({ x: centerX - (x - centerX), y: centerY - (y - centerY) });
+    const toScreen = (x,y)=> (playerRole === 'player2') ? mirror(x,y) : {x,y};
+    const toLogical = (sx,sy)=> (playerRole === 'player2') ? mirror(sx,sy) : {x:sx, y:sy};
+
+    function nearestTile(x,y){
+      let best=Infinity, bestId=null, bestPos=null;
+      for (const [id,p] of Object.entries(tilePositions)){
+        const d = (x-p.x)**2 + (y-p.y)**2;
+        if (d < best){ best=d; bestId=id; bestPos=p; }
+      }
+      return { id: bestId, ...bestPos };
+    }
+    function occupied(tileId, except=null){
+      return Array.from(document.querySelectorAll('.token'))
+        .some(t => t !== except && t.dataset.tile === tileId);
+    }
+
+    /* ---------- Highlights ---------- */
+    const ghosts = [];
+    // Global fallback: ensure a top-level function exists for drag handlers
+    if (typeof window.clearNonBlossomGhosts !== 'function'){
+      window.clearNonBlossomGhosts = function(){
+        try {
+          for (let i = ghosts.length - 1; i >= 0; i--){
+            const el = ghosts[i];
+            if (!el || !el.classList) continue;
+            const keep = el.classList.contains('blossom') || el.classList.contains('blossom-pink') ||
+                         el.classList.contains('enemy-blossom') || el.classList.contains('enemy-blossom-pink');
+            if (!keep){ ghosts.splice(i,1); el.remove(); }
+          }
+        } catch(e){ clearGhosts(); }
+      };
+    }
+
+    function clearGhosts(){ while (ghosts.length) ghosts.pop().remove(); }
+    // Remove only red attack overlays, preserve blossom walls/auras
+    function clearAttackGhosts(){
+      for (let i = ghosts.length - 1; i >= 0; i--){
+        const el = ghosts[i];
+        if (el && el.classList && el.classList.contains('attack')){
+          ghosts.splice(i,1);
+          el.remove();
+        }
+
+    // Remove all non-blossom ghosts; keep blossom overlays visible during movement
+    function clearNonBlossomGhosts(){
+      for (let i = ghosts.length - 1; i >= 0; i--){
+        const el = ghosts[i];
+        if (!el || !el.classList) continue;
+        const keep = el.classList.contains('blossom') || el.classList.contains('blossom-pink') ||
+                     el.classList.contains('enemy-blossom') || el.classList.contains('enemy-blossom-pink');
+        if (!keep){ ghosts.splice(i,1); el.remove(); }
+      }
+    }
+      }
+    }
+
+    function addGhost(tileId, className=''){
+      const p = tilePositions[tileId];
+      const s = toScreen(p.x,p.y);
+      const g = document.createElement('div');
+      g.className = 'ghost' + (className ? (' '+className) : '');
+      g.style.left = `${s.x}px`;
+      g.style.top  = `${s.y}px`;
+      g.title = tileId;
+      board.appendChild(g);
+      ghosts.push(g);
+    }
+    function highlightSet(tileIds, cls){
+      clearGhosts();
+      for (const t of tileIds) addGhost(t, cls);
+    }
+
+    /* ---------- Local board/card state ---------- */
+    /* [ENERGY] Local energy snapshot + UI */
+    let energyBySeat = { player1:0, player2:0 };
+    function myEnergy(){ return energyBySeat[playerRole] || 0; }
+    function updateEnergyBar(val, max=10){
+      energyBySeat[playerRole] = val;
+      const box = document.getElementById('energyBox');
+      const fill = box.querySelector('.energybar .fill');
+      const valEl = document.getElementById('energyVal');
+      const maxEl = document.getElementById('energyMax');
+      const pct = Math.max(0, Math.min(100, (val/max)*100));
+      fill.style.width = pct + '%';
+      valEl.textContent = String(val|0);
+      maxEl.textContent = String(max|0);
+    }
+    function flashEnergyNotEnough(){
+      const box = document.getElementById('energyBox'); if (!box) return;
+      box.classList.add('pulse');
+      setTimeout(()=> box.classList.remove('pulse'), 600);
+    }
+
+    const localWalls = new Set();
+    let selectedCard = null;
+    let playedCardThisTurn = false;
+    let cardArmed = false;
+    let armedCardName = null;
+    let simpleTarget = null; // { card: 'Fireball' | 'Entangle' | 'Iron Skin' } // requires board selection after pressing Play (wall/quake/teleport)
+    let moveBuff = { stepsBonus:0, minSteps:0 }; // client preview; server authoritative
+    let moveBuffOnce = false; // true when Sprint was played; clear after first local move
+
+    function applyWallLocal(tileId){ localWalls.add(tileId); addGhost(tileId, 'block wall persist'); showWallOverlay(tileId); }
+    function removeWallLocal(tileId){ localWalls.delete(tileId); [...document.querySelectorAll('.ghost.block.wall')].filter(g=>g.title===tileId).forEach(el=>el.remove()); hideWallOverlay(tileId); }
+    
+    // ===== Overlay wall helpers (independent of ghost system) =====
+    function showWallOverlay(tileId){
+      if (wallOverlays.has(tileId)) return;
+      const el = document.createElement('div');
+      el.className = 'wall-overlay';
+      el.title = tileId;
+      const pos = tilePositions[tileId];
+      if (pos){
+        const s = toScreen(pos.x, pos.y);
+        el.style.left = s.x + 'px';
+        el.style.top  = s.y + 'px';
+      }
+      wallOverlayLayer.appendChild(el);
+      wallOverlays.set(tileId, el);
+    }
+    function hideWallOverlay(tileId){
+      const el = wallOverlays.get(tileId);
+      if (el){ el.remove(); wallOverlays.delete(tileId); }
+    }
+    function reconcileWallOverlays(blockedList){
+      const keep = new Set((blockedList||[]).map(w=> (w && (w.tile||w))));
+      // remove old overlays not present anymore
+      for (const tid of Array.from(wallOverlays.keys())){
+        if (!keep.has(tid)) hideWallOverlay(tid);
+      }
+      // add overlays missing
+      for (const tid of keep){
+        showWallOverlay(tid);
+      }
+    }
+    const localBlossomWalls = new Set();
+    function applyBlossomWallLocal(tileId){ localBlossomWalls.add(tileId); addGhost(tileId, 'block blossom'); }
+    function removeBlossomWallLocal(tileId){ localBlossomWalls.delete(tileId); [...document.querySelectorAll('.ghost.block.blossom')].filter(g=>g.title===tileId).forEach(el=>el.remove()); }
+    const localBlossomPinkWalls = new Set();
+    function applyBlossomPinkWallLocal(tileId){ localBlossomPinkWalls.add(tileId); addGhost(tileId, 'block blossom-pink'); }
+    function removeBlossomPinkWallLocal(tileId){ localBlossomPinkWalls.delete(tileId); [...document.querySelectorAll('.ghost.block.blossom-pink')].filter(g=>g.title===tileId).forEach(el=>el.remove()); }
+
+    const enemyBlossomWalls = new Set();
+    function applyEnemyBlossomWallLocal(tileId){ enemyBlossomWalls.add(tileId); addGhost(tileId, 'block enemy-blossom'); }
+    function removeEnemyBlossomWallLocal(tileId){ enemyBlossomWalls.delete(tileId); [...document.querySelectorAll('.ghost.block.enemy-blossom')].filter(g=>g.title===tileId).forEach(el=>el.remove()); }
+    const enemyBlossomPinkWalls = new Set();
+    function applyEnemyBlossomPinkWallLocal(tileId){ enemyBlossomPinkWalls.add(tileId); addGhost(tileId, 'block enemy-blossom-pink'); }
+    function removeEnemyBlossomPinkWallLocal(tileId){ enemyBlossomPinkWalls.delete(tileId); [...document.querySelectorAll('.ghost.block.enemy-blossom-pink')].filter(g=>g.title===tileId).forEach(el=>el.remove()); }
+    
+    /* ---------- Ability defs (match server) ---------- */
+    const ABIL_DEFS = {
+      Tank:    { emoji:'🛡️', color:'#6aa84f', maxHp:18,
+                 primary:{type:'damage', dmg:3, range:1, name:'Shield Bash'}, special:{type:'damage', dmg:5, range:1, name:'Hammer Slam'} },
+      DPS1:    { emoji:'🐲', color:'#e06666', maxHp:12,
+                 primary:{type:'damage', dmg:3, range:2, name:'Fire Bolt'}, special:{type:'damage', dmg:4, range:2, name:'Dragon’s Fury'} },
+      DPS2:    { emoji:'🗡️', color:'#f6b26b', maxHp:11,
+                 primary:{type:'damage', dmg:3, range:1, name:'Dagger Thrust'}, special:{type:'damage', dmg:5, range:1, name:'Sneak Attack'} },
+      Support: { emoji:'🌿', color:'#93c47d', maxHp:13,
+                 primary:{type:'heal', heal:3, range:2, name:'Mend'}, special:{type:'heal', heal:4, range:2, name:'Healing Bloom'} }
+    }
+
+
+    /* --- Per-hero overrides (client) --- */
+    
+    /* Map character names to portrait images in /public/assets/Character Images */
+    function imagePathForName(name){
+      const map = {
+    "Dungeon Master": "assets/Character Images/Dungeon_Master.png",
+        "Voodoo": "assets/Character Images/Voodoo.png",
+        "Trickster": "assets/Character Images/Trickster.png",
+        "Aimbot": "assets/Character Images/Aimbot.png",
+        "Death Blossom": "assets/Character Images/Death_Blossom.png",
+        "Loadstone": "assets/Character Images/Loadstone.png","Little Bear": "assets/Character Images/Little_Bear.png",
+        "Don Atore": "assets/Character Images/Don_Atore.png"
+      };
+      return map[name] || null;
+    }
+const ABIL_OVERRIDES = {
+  "Little Bear": { emoji:"🐻", color:"#a36f3f", maxHp:13, primary:{ type:"damage", dmg:3, range:1, name:"Paw Swipe" }, special:{ name:"Transform", type:"transform", energyCost:5, autoSelf:true } },
+  "Dungeon Master": {
+    emoji:'🎲', color:'#8e7cc3', maxHp:12,
+    primary:{ type:'damage', dmg:'1d6', range:2, name:'1D6' },
+    special:{ type:'buff', name:'Skill Check', range:2, energyCost:3 }
+  },
+      "Death Blossom": {
+        emoji:'🌸',
+        color:'#93c47d',
+        maxHp:10,
+        primary:{ type:'heal', heal:2, range:2, name:'Nectar of Life' },
+        special:{ type:'petal', heal:3, range:99, radius:1, name:'Healing Blossom', energyCost:3 }
+      },
+
+      Trickster: {
+        emoji:'🃏',
+        color:'#f1c232',
+        maxHp:11,
+        primary:{ type:'damage', dmg:4, range:1, name:'Sleight of Hand' },
+        special:{ type:'swap',   range:99, name:'Swap', energyCost:4 }
+      },
+      Voodoo: {
+        emoji:'🧿',
+        color:'#b56576',
+        // if maxHp not set, Tank base (18) is used
+        primary:{ type:'damage', dmg:4, range:1, name:'Pin Cushion' },
+        special:{ type:'redirect', name:'Voodoo Doll', energyCost:3, range:0, duration:2, autoSelf:true }
+      },
+      Aimbot: {
+        emoji:'🤖',
+        color:'#a3c4f3',
+        maxHp:8,
+        primary:{ type:'damage', dmg:5, range:3, name:'True Shot' },
+        special:{ type:'fmj',    range:4, name:'FMJ', energyCost:6 }
+      },
+      "Loadstone": {
+        emoji:'🧲',
+        color:'#6aa84f',
+        maxHp:15,
+        primary:{ type:'aoe',    dmg:2, range:1, name:'Reverse Polarity', autoSelf:true },
+        special:{ type:'polar',  range:2, name:'Polar Attraction', energyCost:4, autoSelf:true }
+      }
+      
+,
+"Don Atore": {
+  emoji:"🩸",
+  color:"#b22222",
+  maxHp:12,
+  movement:2,
+  primary:{ type:'tapHeal', name:'Blood Donation', range:1 },
+  special:{ type:"selfHeal", heal:5, range:0, name:"Replenish", energyCost:5, autoSelf:true }
+}
+};
+    function getMeta(role, name){
+      const base = ABIL_DEFS[role] || ABIL_DEFS.Tank;
+      const ov = name && ABIL_OVERRIDES[name];
+      if (!ov) return base;
+      return {
+        ...base,
+        maxHp: ov.maxHp ?? base.maxHp,
+        primary: { ...(base.primary||{}), ...(ov.primary||{}) },
+        special: { ...(base.special||{}), ...(ov.special||{}) },
+        emoji: ov.emoji || base.emoji,
+        color: ov.color || base.color
+      };
+    }
+;
+
+    /* ---------- Character STATE ---------- */
+    const charState = new Map();
+    function initCharIfMissing(id, roleGuess, ownerGuess, nameGuess){
+      if (charState.has(id)) return;
+      const role = roleGuess || guessRoleFromId(id);
+      const def = getMeta(role, nameGuess);
+      charState.set(id, { role, owner: ownerGuess || null, hp:def.maxHp, maxHp:def.maxHp, cds:{ special:0 }, dead:false, name:nameGuess||id });
+    }
+    function setHP(id, hp){
+      if (!charState.has(id)) initCharIfMissing(id);
+      const s = charState.get(id);
+      s.hp = Math.max(0, Math.min(s.maxHp, hp));
+      s.dead = (s.hp <= 0);
+    }
+    function getRoleState(id){ initCharIfMissing(id); return charState.get(id).role; }
+
+    /* ---------- Tokens ---------- */
+    /* ---------- Status FX (UI only) ---------- */
+    const STATUS_EMOJI = { fireDot:'🔥', ironSkin:'🛡️', entangle:'🌿', redirect:'🧿' , skillCheck:'🎲', bear:'🐻' };
+    const STATUS_DEFAULT_TURNS = { fireDot:3, ironSkin:2, entangle:2, redirect:2 , skillCheck:1 };
+    const statusFX = new Map(); // id -> { fireDot:n, ironSkin:n, entangle:n }
+
+    
+    function updatePrimaryDesc(id){
+      const card = document.querySelector(`.charCard[data-id="${id}"]`);
+      if (!card) return;
+      const nameEl = card.querySelector('.charName');
+      const displayName = (charState.get(id)||{}).name || (nameEl ? nameEl.textContent.trim() : '');
+      const fx = statusFX.get(String(id)) || {};
+      let text;
+      if (displayName === 'Little Bear' && fx.bear && Number(fx.bear) > 0){
+        text = 'Bear Claw: 5 dmg (range 1)';
+      }else{
+        const role = getRoleState(id) || guessRoleFromId(id);
+        const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : (ABIL_DEFS[role]||ABIL_DEFS.Tank));
+        if (!meta || !meta.primary) return;
+        if (displayName === 'Don Atore' && meta.primary && meta.primary.type === 'tapHeal'){
+          const r = meta.primary.range ?? 1;
+          const txt = `${meta.primary.name}: -1HP for +1HP (R${r})`;
+          const firstLine = card.querySelector('.desc .descLine:first-child');
+          if (firstLine) firstLine.textContent = txt;
+          return;
+        }
+                const isHeal = (meta.primary.type === 'heal');
+let amt;
+if (displayName === 'Don Atore' && isHeal && meta.primary.selfLossEqual === true){
+  // shorter copy per request
+  text = `${meta.primary.name}: -1HP for +1HP (R${meta.primary.range})`;
+  return;
+} else {
+  amt = isHeal ? `${meta.primary.heal} heal` : `${meta.primary.dmg} dmg`;
+}
+text = `${meta.primary.name}: ${amt} (range ${meta.primary.range})`;
+      }
+      const firstLine = card.querySelector('.desc .descLine:first-child');
+      if (firstLine) firstLine.textContent = text;
+    }
+function renderStatusRow(id){
+      const card = document.querySelector(`.charCard[data-id="${id}"]`);
+      if (!card) return;
+      const row = card.querySelector('.statusRow');
+      if (!row) return;
+      const fx = statusFX.get(id) || {};
+      const entries = Object.entries(fx).filter(([,v])=>v>0);
+      if (!entries.length){ row.innerHTML = ''; return; }
+      row.innerHTML = entries.map(([k,v]) => {
+        const emoji = STATUS_EMOJI[k] || '•';
+        return `<span class="statusPill" data-k="${k}"><span class="em">${emoji}</span><span class="num">${v}</span></span>`;
+      }).join('');
+      try{ updatePrimaryDesc(String(id)); }catch(e){}
+    }
+    function applyStatusFX(fxMap){
+      statusFX.clear();
+      if (fxMap){
+        for (const [id, obj] of Object.entries(fxMap)){
+          statusFX.set(String(id), { ...obj });
+        }
+      }
+      document.querySelectorAll('.charCard').forEach(c=>{
+        renderStatusRow(c.dataset.id);
+      });
+    }
+    function addOrUpdateStatusLocal(id, kind, turns){
+      if (!id) return;
+      const cur = statusFX.get(String(id)) || {};
+      cur[kind] = Math.max(turns ?? STATUS_DEFAULT_TURNS[kind] ?? 1, cur[kind]||0);
+      statusFX.set(String(id), cur);
+      renderStatusRow(String(id));
+    }
+
+    function tokenPortraitFor(id){
+      const el = document.querySelector(`.charCard[data-id="${id}"] .charPortrait`);
+      return el ? el.textContent.trim() : '●';
+    }
+    function spawnToken(id, tileId, owner){
+      const p = tilePositions[tileId];
+      const s = toScreen(p.x,p.y);
+      const t = document.createElement('div');
+      t.className = 'token';
+      t.dataset.id = id;
+      t.dataset.owner = owner;
+      t.dataset.tile = tileId;
+      t.dataset.hasMoved = "false";
+      t.innerHTML = `<div class="portrait">${tokenPortraitFor(id)}</div>`;
+      t.style.left = `${s.x}px`;
+      t.style.top  = `${s.y}px`;
+      if (playerRole === owner && !GAME_ENDED) makeDraggable(t);
+      board.appendChild(t);
+      refreshDraggables();
+    }
+    function spawnAllFromState(tokensState){
+      const keep = new Set(Object.keys(tokensState));
+      document.querySelectorAll('.token').forEach(n=>{ if (!keep.has(n.dataset.id)) n.remove(); });
+      for (const [id, t] of Object.entries(tokensState)){
+        let el = document.querySelector(`.token[data-id="${id}"]`);
+        if (!el){
+          spawnToken(id, t.tile, t.owner);
+          el = document.querySelector(`.token[data-id="${id}"]`);
+        }else{
+          el.dataset.tile = t.tile;
+          const p = tilePositions[t.tile], s = toScreen(p.x,p.y);
+          el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
+        }
+      }
+      refreshDraggables();
+    }
+
+    const pendingMoves = new Map(); // id -> previous tile id
+
+    function makeDraggable(token){
+      token.addEventListener('mousedown', ()=>{
+        if (token.dataset.rooted === "true") return;
+        if (GAME_ENDED) return;
+        if (playerRole !== currentTurn) return;
+        if (token.dataset.owner !== playerRole) return;
+        if (turnState.usedMovement) return;
+
+        const hasMoved = token.dataset.hasMoved === "true";
+        const fxrow = (statusFX.get(String(token.dataset.id))||{});
+        const stepBonus = (currentTurn === token.dataset.owner) ? (fxrow.moveBonus||0) : 0;
+        let bearBonus = (fxrow && fxrow.bear && Number(fxrow.bear) > 0) ? 1 : 0;
+        if (!bearBonus){
+          const pill = document.querySelector(`.charCard[data-id="${token.dataset.id}"] .statusPill[data-k="bear"]`);
+          if (pill) bearBonus = 1;
+        }
+        let steps = (hasMoved ? 1 : 2) + (moveBuff.stepsBonus || 0) + stepBonus + bearBonus;
+
+        clearNonBlossomGhosts();
+        const from = token.dataset.tile;
+        const reach = reachable(from, steps, localWalls);
+        for (const tid of reach){
+          if (!occupied(tid, token) && !localWalls.has(tid)) addGhost(tid);
+        }
+
+        const startTile = token.dataset.tile;
+
+        const onMove = (ev)=>{
+          token.style.left = `${ev.pageX}px`;
+          token.style.top  = `${ev.pageY}px`;
+        };
+
+        const onUp = (ev)=>{
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          clearNonBlossomGhosts();
+
+          const rawX = ev.pageX - board.offsetLeft;
+          const rawY = ev.pageY - board.offsetTop;
+          const logicalPt = toLogical(rawX, rawY);
+          const snap = nearestTile(logicalPt.x, logicalPt.y);
+
+          
+          // Client-side guard: do not attempt to move onto a wall tile.
+          if (localWalls && localWalls.has(snap.id)) {
+            // snap back visually; server would reject anyway, but this avoids flicker
+            const prev = startTile;
+            const p = tilePositions[prev];
+            const sxy = toScreen(p.x, p.y);
+            token.style.left = `${sxy.x}px`;
+            token.style.top  = `${sxy.y}px`;
+            return;
+          }
+const hasMoved2 = token.dataset.hasMoved === "true";
+          const fxrow2 = (statusFX.get(String(token.dataset.id))||{});
+          const bearBonus2 = (fxrow2 && fxrow2.bear && Number(fxrow2.bear) > 0) ? 1 : 0;
+          let steps2 = (hasMoved2 ? 1 : 2) + (moveBuff.stepsBonus || 0) + bearBonus2;
+                    const d = shortestDistanceWithWalls(startTile, snap.id, localWalls);
+          // Let the server validate the move; if invalid, it will snap back via 'invalidMove'.
+pendingMoves.set(token.dataset.id, startTile);
+          socket.emit('requestMove', { id: token.dataset.id, owner: token.dataset.owner, toTile: snap.id });
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+    function refreshDraggables(){
+      document.querySelectorAll('.token').forEach(t=>{
+        if (!t.dataset.draggable &&
+            t.dataset.owner === playerRole &&
+            !GAME_ENDED && t.dataset.rooted !== "true") {
+          makeDraggable(t);
+          t.dataset.draggable = "1";
+        }
+      });
+    }
+
+    
+    /* ---------- Root locks (Entangle) ---------- */
+    function applyRootLocks(locks){
+      document.querySelectorAll('.token').forEach(t=>{
+        const id = t.dataset.id;
+        const rooted = !!(locks && locks[id] && locks[id].entangle);
+        if (rooted){
+          t.classList.add('rooted');
+          t.dataset.rooted = "true";
+        } else {
+          t.classList.remove('rooted');
+          if (t.dataset.rooted) delete t.dataset.rooted;
+        }
+      });
+      refreshDraggables();
+    }
+/* ---------- Character cards ---------- */
+    function buildCharCard(id, owner, role, dead=false, displayName){
+      initCharIfMissing(id, role, owner, displayName);
+      const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : (ABIL_DEFS[role]||ABIL_DEFS.Tank));
+      const st = charState.get(id);
+      const pct = Math.max(0, Math.min(100, Math.round(100 * st.hp / st.maxHp)));
+      const isAlly = owner === playerRole;
+
+            let descPrimary;
+if (
+  (displayName === 'Don Atore') &&
+  meta.primary && meta.primary.type === 'heal' &&
+  (meta.primary.selfLossEqual === true)
+) {
+  // shorter copy per request
+  descPrimary = `${meta.primary.name}: -1HP for +1HP (R${meta.primary.range})`;
+} else {
+        descPrimary = `${meta.primary.name}: ${meta.primary.type==='heal' ? (meta.primary.heal+' heal') : (meta.primary.dmg+' dmg')} (range ${meta.primary.range})`;
+      }
+
+      
+      
+      // --- Special description (short custom text for certain abilities) ---
+      let descSpecial;
+      const sName = (meta.special && meta.special.name ? String(meta.special.name).toLowerCase() : '');
+
+      if (sName === 'transform') {
+        descSpecial = 'Transform: become a bear';
+      } else if (sName === 'voodoo doll') {
+        // No range text for redirect
+        descSpecial = 'Voodoo Doll: absorbs allies’ damage';
+      } else if (sName === 'swap') {
+        // No range text for swap
+        descSpecial = 'Swap: swap places';
+      } else if (sName === 'fmj') {
+        const r = (meta.special && meta.special.range != null) ? meta.special.range : 4;
+        descSpecial = `FMJ: piercing shot (range ${r})`;
+      } else if (meta.special.type === 'petal') {
+        const healAmt = (meta.special.heal ?? 3);
+        const r = (meta.special.radius ?? 1);
+        descSpecial = `${meta.special.name || 'Healing Blossom'}: heal ${healAmt} (r${r} AoE)`;
+      } else if (meta.special.type === 'swap' || meta.special.type === 'redirect') {
+        // Fallback for other swap/redirect variants
+        descSpecial = `${meta.special.name || 'Special'}: ability`;
+      } else if (meta.special.type === 'selfHeal') {
+        descSpecial = `${meta.special.name || 'Special'}: heal ${meta.special.heal} (self)`;
+      } else if (meta.special.type === 'heal') {
+        descSpecial = `${meta.special.name || 'Special'}: ${meta.special.heal} heal (range ${meta.special.range || 1})`;
+      } else if (meta.special.type === 'damage') {
+        descSpecial = `${meta.special.name || 'Special'}: ${meta.special.dmg} dmg (range ${meta.special.range || 1})`;
+      } else {
+        const r = (meta.special.range != null ? meta.special.range : null);
+        descSpecial = `${meta.special.name || 'Special'}: ability${(r && r > 0) ? ` (range ${r})` : ''}`;
+      }
+
+      const wrap = document.createElement('div');
+
+      wrap.className = 'charCard' + (dead ? ' dead' : '');
+      wrap.dataset.id = id;
+      wrap.dataset.role = role;
+
+      const nameText = (displayName || id);
+
+      wrap.innerHTML = `
+        <div class="charName">${nameText} ${dead?'<span class="deadBadge">DEAD</span>':''}</div>
+        <div class="charPortrait" style="background:${meta.color}22;border:1px solid #0003">${(()=>{const p=imagePathForName(nameText); return p? `<span class=\"emojiBackup\" style=\"display:none\">${meta.emoji}</span><img class=\"charImg\" src=\"${p}\" alt=\"${nameText}\"/>` : `${meta.emoji}`;})()}</div>
+        <div class="charBody">
+          <div class="statLine onlyHp">
+            <span class="hpLine"><span class="hpIcon" aria-hidden="true">❤️</span> <b class="hp">${st.hp}</b>/<b class="hpmax">${st.maxHp}</b></span>
+          </div>
+          <div class="hpbar ${pct<=30?'danger':''}">
+            <div class="fill" style="width:${pct}%"></div>
+          </div>
+          <div class="statusRow" aria-label="statuses"></div>
+          <div class="desc">
+            <div class="descLine">${descPrimary}</div>
+            <div class="descLine">${descSpecial}</div>
+          </div>
+          <div class="btnRow">
+            <button class="cbtn primaryBtn">Primary</button>
+            <button class="cbtn specialBtn">Special</button>
+          </div>
+        </div>
+`;
+      // show cost if any
+      (function(){
+        const btn = wrap.querySelector('.specialBtn');
+        if (btn && meta && meta.special && meta.special.energyCost){ btn.textContent = `Special (${meta.special.energyCost}⚡)`; }
+      })();
+
+      if (!isAlly || dead || GAME_ENDED || (playerRole !== currentTurn)){
+        wrap.querySelectorAll('button').forEach(b=>b.disabled = true);
+      }else{
+        wrap.querySelector('.primaryBtn').onclick = (ev)=>{ ev.stopPropagation(); if (!turnState.usedAction) selectAbility('primary', id); };
+        wrap.querySelector('.specialBtn').onclick = (ev)=>{
+          ev.stopPropagation(); ev.preventDefault();
+          if (turnState.usedAction) return;
+          const role = getRoleState(id) || guessRoleFromId(id);
+          const displayName = (charState.get(id)||{}).name;
+          const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : ABIL_DEFS[role]);
+          const def = meta && meta.special;
+          if ((def && def.autoSelf === true) || (displayName === 'Loadstone' && kind === 'primary')) {
+            try {
+              socket.emit('useSpecial', { sourceId: id, targetId: id });
+              if (def.type === 'redirect'){
+                addOrUpdateStatusLocal(id, 'redirect', def.duration ?? 2);
+              }
+            } catch(e){ /* ignore */ }
+            // clear any selection/ghosts
+            abilitySel = null;
+            document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+            clearGhosts();
+            return;
+          }
+          // regular targeting flow
+          selectAbility('special', id);
+        };
+      }
+      return wrap;
+    }
+
+    function refreshPanelsFromChars(charsState){
+      allyPanel.innerHTML = '';
+      enemyPanel.innerHTML = '';
+
+      for (const [id, cs] of Object.entries(charsState)){
+        initCharIfMissing(id, cs.role, cs.owner, cs.name);
+        const local = charState.get(id);
+        local.owner = cs.owner;
+        local.role = cs.role;
+        local.maxHp = (typeof getMeta==='function' ? getMeta(cs.role, cs.name).maxHp : ABIL_DEFS[cs.role].maxHp);
+        local.hp = Math.max(0, Math.min(local.maxHp, cs.hp ?? local.hp));
+        local.cds = cs.cds ?? local.cds;
+        local.dead = !!cs.dead;
+        local.name = cs.name || id;
+
+        const card = buildCharCard(id, cs.owner, cs.role, local.dead, local.name);
+        if (cs.owner === playerRole) allyPanel.appendChild(card);
+        else enemyPanel.appendChild(card);
+      }
+    }
+
+    function guessRoleFromId(id){
+      if (id.includes('P1') || id.includes('E1')) return 'Tank';
+      if (id.includes('P2') || id.includes('E2')) return 'DPS1';
+      if (id.includes('P3') || id.includes('E3')) return 'DPS2';
+      return 'Support';
+    }
+    function syncTokenPortraits(){
+      document.querySelectorAll('.token').forEach(tok=>{
+        const id = tok.dataset.id;
+        const el = document.querySelector(`.charCard[data-id="${id}"] .charPortrait`);
+        if (el) tok.querySelector('.portrait').textContent = el.textContent.trim();
+      });
+    }
+    function updateHPBar(id){
+      const card = document.querySelector(`.charCard[data-id="${id}"]`);
+      if (!card) return;
+      const st = charState.get(id);
+      const pct = Math.max(0, Math.min(100, Math.round(100*st.hp/st.maxHp)));
+      const bar = card.querySelector('.hpbar');
+      const fill = card.querySelector('.hpbar .fill');
+      fill.style.width = pct + '%';
+      bar.classList.toggle('danger', pct<=30);
+      card.querySelector('.hp').textContent = st.hp;
+      card.querySelector('.hpmax').textContent = st.maxHp;
+
+      if (st.dead){
+        card.classList.add('dead');
+        const nameEl = card.querySelector('.charName');
+        if (nameEl && !nameEl.querySelector('.deadBadge')){
+          const b = document.createElement('span');
+          b.className = 'deadBadge';
+          b.textContent = 'DEAD';
+          nameEl.appendChild(b);
+        }
+        card.querySelectorAll('button').forEach(b=>b.disabled = true);
+      }
+    }
+
+    /* ---------- SIMPLE FLASH OVERLAY (1.25s, both screens) ---------- */
+    function flashCard(id, kind){
+      const card = document.querySelector(`.charCard[data-id="${id}"]`);
+      if (!card) return;
+      const overlay = document.createElement('div');
+      overlay.className = 'hitOverlay ' + (kind === 'heal' ? 'heal' : 'dmg');
+      card.appendChild(overlay);
+      setTimeout(()=>{ if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 1300);
+    }
+
+    /* ---------- Ability selection ---------- */
+    let abilitySel = null;
+
+    function selectAbility(kind, sourceId){
+      if (GAME_ENDED) return;
+      if (playerRole !== currentTurn) return;
+      if (turnState.usedAction) return;
+
+      const role = getRoleState(sourceId) || guessRoleFromId(sourceId);
+      const displayName = (charState.get(sourceId)||{}).name;
+      const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : ABIL_DEFS[role]);
+      const def = (kind === 'primary') ? meta.primary : meta.special;
+      const range = def.range ?? 1;
+      
+      /* Auto‑self abilities (instant) */
+      if (def && (def.autoSelf === true || (displayName === 'Loadstone' && kind === 'primary'))) {
+        const evt = (kind === 'primary') ? 'usePrimary' : 'useSpecial';
+        socket.emit(evt, { sourceId, targetId: sourceId });
+        if (kind === 'special' && def.type === 'redirect'){
+          addOrUpdateStatusLocal(sourceId, 'redirect', def.duration ?? 2);
+        }
+        abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
+        document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+        clearGhosts();
+        return;
+      }
+
+
+      const exact = (displayName === 'Aimbot' && kind === 'primary');
+
+      
+      // Toggle off if pressing the same ability again
+      if (abilitySel && abilitySel.kind === kind && abilitySel.sourceId === sourceId){
+        abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
+        document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+        clearGhosts();
+        return;
+      }
+abilitySel = { kind, sourceId, range, exact };
+
+      document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+      const sc = document.querySelector(`.charCard[data-id="${sourceId}"]`);
+      if (sc) sc.style.outline = '3px solid #ffd772';
+
+      const token = document.querySelector(`.token[data-id="${sourceId}"]`);
+      if (!token) return;
+      const start = token.dataset.tile;
+      let area = areaWithin(start, range, localWalls);
+      if (exact && range>0){
+        const inner = new Set(areaWithin(start, range-1, localWalls));
+        area = area.filter(t=>!inner.has(t));
+      }
+      // Do NOT show red overlay for Healing Blossom
+      const isPetalSpecial = (kind === 'special' && def && (def.type === 'petal' || (def.name||'').toLowerCase().includes('petal') || (def.name||'').toLowerCase().includes('blossom')));
+      if (!isPetalSpecial) { highlightSet(area, 'attack'); } else { clearAttackGhosts(); }
+
+    }
+
+    function tileOfToken(id){
+      const t = document.querySelector(`.token[data-id="${id}"]`);
+      return t ? t.dataset.tile : null;
+    }
+    function distanceTiles(a, b){
+      if (!a || !b) return Infinity;
+      if (a === b) return 0;
+      const seen = new Set([a]); const q = [[a,0]];
+      while(q.length){
+        const [cur, d] = q.shift();
+        for (const n of neighbors(cur)){
+          if (seen.has(n)) continue;
+          if (n === b) return d+1;
+          seen.add(n); q.push([n, d+1]);
+        }
+      }
+      return Infinity;
+    }
+
+    /* [ENERGY] Card costs (match server) */
+    function costOf(n){ try { return (CARD_COST[n] ?? CARD_COST[String(n).replace(/\s+/g,'')] ?? 0) | 0; } catch(e){ return 0; } }
+
+const CARD_COST = {
+  Cleanse: 3,
+  Siphon: 2,
+  Fireball: 4,
+  Entangle: 2,
+  IronSkin: 3,
+  Sprint: 2,
+  Wall: 1,
+  Shatter: 1,};
+
+    /* ---------- Discard UI helpers ---------- */
+    const CARD_DESC = {
+  Cleanse: 'Remove all status effects from a unit (any range)',
+  Siphon:  'Instant: pay 2, gain 1 energy; opponent loses 3',
+  Sprint:  'Gain 1 move',
+  Wall:   'Place a wall (8 turns)',
+  Shatter:'Remove a wall'
+};
+
+    function renderDiscard(slotEl, type){
+  slotEl.innerHTML = '';
+  const cardWrap = document.createElement('div');
+  cardWrap.className = 'discardCard';
+  if (!type){ slotEl.appendChild(cardWrap); return; }
+  const img = document.createElement('img');
+  img.className = 'discardImg';
+  img.alt = type;
+  img.src = cardImagePathFor(type);
+  cardWrap.appendChild(img);
+  slotEl.appendChild(cardWrap);
+      updatePrimaryDesc(String(id));
+
+}
+
+    function setDiscardByWho(who, type){
+      if (!type) return; // persist last shown discard if server sends null/undefined
+
+
+// If Dungeon Master used 1D6 while Skill Check is active, 
+// swap to the '1D6SC-(roll+1)' artwork.
+(function(){
+  try {
+    const m = /^1D6-(\d)$/.exec(type);
+    if (m) {
+      const rolled = parseInt(m[1], 10);
+      // detect if this 'who' currently controls a Dungeon Master with Skill Check
+      let hasSC = false;
+      let dmId = null;
+      for (const [id, st] of (window.charState || new Map()).entries()) {
+        if (st && st.owner === who && String(st.name).toLowerCase() === 'dungeon master') {
+          dmId = String(id);
+          break;
+        }
+      }
+      if (dmId) {
+        const fx = (window.statusFX && window.statusFX.get(dmId)) || {};
+        hasSC = !!fx.skillCheck;
+      }
+      if (hasSC) {
+        const boosted = Math.min(7, rolled + 1);
+        type = `1D6SC-${boosted}`;
+      }
+    }
+  } catch(e) { /* no-op */ }
+})();
+
+      if (playerRole === 'player1'){
+        if (who === 'player1') renderDiscard(discardSelfSlot, type);
+        else if (who === 'player2') renderDiscard(discardOtherSlot, type);
+      }else if (playerRole === 'player2'){
+        if (who === 'player2') renderDiscard(discardSelfSlot, type);
+        else if (who === 'player1') renderDiscard(discardOtherSlot, type);
+      }else{
+        if (who === 'player1') renderDiscard(discardOtherSlot, type);
+        if (who === 'player2') renderDiscard(discardSelfSlot, type);
+      }
+    }
+
+    /* ---------- Board clicks ---------- */
+    board.addEventListener('click', (e)=>{
+    // Cancel Blossom special if clicking UI inside the board (buttons, cards, etc.)
+    if (window.abilitySel && window.abilitySel.kind === 'special'){
+      const uiHit = e.target.closest('#end-turn, .charCard, #hand, .cbtn, .primaryBtn, .specialBtn, .card, button');
+      if (uiHit && !e.target.closest('.token')){
+        window.abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
+        document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+        if (typeof clearGhosts === 'function') clearGhosts();
+        return; // do not place
+      }
+    }
+      if (GAME_ENDED) return;
+      if (e.target.closest('.card') || e.target.closest('.panel') || e.target.closest('#end-turn')) return;
+
+      const targetTok = e.target.closest('.token');
+
+      // Ability targeting
+      if (abilitySel && targetTok){
+        const { sourceId, range, kind } = abilitySel;
+        const targetId = targetTok.dataset.id;
+        const d = distanceTiles(tileOfToken(sourceId), tileOfToken(targetId));
+        if (d !== Infinity && d <= range){
+          // Don Atore continuous tap-heal: intercept and keep selection armed
+          try{
+            const srcState = (charState && charState.get) ? charState.get(sourceId) : null;
+            const srcName = srcState && srcState.name;
+            const role = getRoleState(sourceId);
+            const meta = getMeta(role, srcName);
+            if (srcName === 'Don Atore' && meta && meta.primary && meta.primary.type === 'tapHeal' && targetTok.dataset.owner === playerRole){
+              if (typeof socket !== 'undefined'){ socket.emit('don:tapHeal', { sourceId, targetId }); }
+              try{ targetTok.classList.add('healPulse'); setTimeout(()=>targetTok.classList.remove('healPulse'), 180);}catch(_){}
+              return; // stay armed
+            }
+          }catch(_){}
+          if (kind === 'primary'){ socket.emit('usePrimary', { sourceId, targetId }); }
+          else { socket.emit('useSpecial', { sourceId, targetId }); }
+        }
+        abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
+        document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+        clearGhosts();
+        return;
+      }
+
+      // Armed card interactions (Wall/Shatter/Teleport)
+      if (!cardArmed) return;
+      const name = (selectedCard && selectedCard.dataset.card) || armedCardName;
+      if (!name) return;
+
+      const rect = board.getBoundingClientRect();
+      const logicalPt = toLogical(e.clientX - rect.left, e.clientY - rect.top);
+      const snap = nearestTile(logicalPt.x, logicalPt.y);
+
+      if (name === 'Wall'){
+        if (myEnergy() < (CARD_COST['Wall']||0)) { flashEnergyNotEnough(); return; }
+          socket.emit('playCard', { type:'Wall', tile:snap.id });
+        applyWallLocal(snap.id);
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        cardArmed = false;
+        return;
+      }
+      if (name === 'Shatter'){
+        if (myEnergy() < (CARD_COST['Shatter']||0)) { flashEnergyNotEnough(); return; }
+        if (!localWalls.has(snap.id)) return;
+        socket.emit('playCard', { type:'Shatter', tile:snap.id });
+        removeWallLocal(snap.id);
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        cardArmed = false;
+        return;
+      }
+      if (name === 'Teleport' && teleportSel.active && teleportSel.source){
+        if (myEnergy() < (CARD_COST['Teleport']||0)) { flashEnergyNotEnough(); return; }
+        if (turnState.usedMovement) return;
+        socket.emit('playCard', { type:'Teleport', sourceId:teleportSel.source, toTile:snap.id });
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        resetTeleport();
+        cardArmed = false;
+        return;
+      }
+    });
+
+    /* ---------- Cards (hand) ---------- */
+    const deck = [
+  { n:'Cleanse', d:'Remove all status effects from a unit' },
+  { n:'Siphon',  d:'Instant energy swing (you +1, opponent -3)' },
+  { n:'Fireball', d:'Burn: 2 damage per turn for 3 turns' },
+  { n:'Entangle', d:'Root the enemy for 2 turns' },
+  { n:'Iron Skin', d:'Reduce damage taken by 2 for 2 turns' },
+  { n:'Sprint', d:'Gain 1 move' },
+  { n:'Wall',     d:'Place a wall (8 turns)' },
+  { n:'Shatter',  d:'Remove a wall' },
+];
+    let deckIdx = 0;
+
+    function positionPlayFloat(cardEl){
+      const r = cardEl.getBoundingClientRect();
+      const boardR = board.getBoundingClientRect();
+      const x = r.left + r.width/2 - boardR.left;
+      const y = r.top - boardR.top - 6; // above the card
+      playFloat.style.left = x + 'px';
+      playFloat.style.top  = y + 'px';
+    }
+    function showPlayFloat(cardEl){
+  positionPlayFloat(cardEl);
+  const nm = cardEl?.dataset?.card;
+  const need = costOf(nm);
+  const have = myEnergy();
+  if (need > 0 && have < need) playFloat.classList.add('disabled'); else playFloat.classList.remove('disabled');
+  playFloat.style.display = 'inline-block';
+}
+    function hidePlayFloat(){ playFloat.style.display = 'none'; }
+
+    function playSelected(){
+      if (!selectedCard || GAME_ENDED) return;
+      const name = selectedCard.dataset.card;
+      if (turnState.cardPlayed) return;
+      if ((name === 'Wall' || name === 'Shatter' || name === 'Scout') && turnState.usedAction) return;
+
+      
+
+      
+      // Energy gate: if you can't afford the card, don't arm or discard
+      const _need = costOf(name);
+      if (_need > 0 && myEnergy() < _need){ flashEnergyNotEnough(); return; }
+// Target-only cards: click Play then click a unit to apply the effect
+      if (name === 'Fireball' || name === 'Entangle' || name === 'Iron Skin' || name === 'Cleanse'){
+        simpleTarget = { card: name };
+        cardArmed = true;
+        label1.textContent = 'Click a unit to apply ' + name;
+        label1.style.display = 'block';
+        // NEW: reveal + discard now so the card no longer blocks the bottom row
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        socket.emit('revealCard', { type: name });
+        return;
+      }
+      // Siphon — instant cast (no target)
+      if (name === 'Siphon'){
+        if (myEnergy() < (CARD_COST['Siphon']||0)) { flashEnergyNotEnough(); return; }
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        socket.emit('revealCard', { type: name });
+        socket.emit('playCard', { type:'Siphon' });
+        return;
+      }
+
+    // Movement buffs (immediate resolve)
+      if (name === 'Sprint'){
+        if (myEnergy() < (CARD_COST['Sprint']||0)) { flashEnergyNotEnough(); return; }
+        if (turnState.usedMovement) return;
+        moveBuff.stepsBonus = (moveBuff.stepsBonus||0) + 1;
+        socket.emit('playCard', { type:'Sprint' });
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        return;
+      }
+      if (name === 'Dash'){
+        if (myEnergy() < (CARD_COST['Dash']||0)) { flashEnergyNotEnough(); return; }
+        if (turnState.usedMovement) return;
+        moveBuff.stepsBonus = (moveBuff.stepsBonus||0) + 2;
+        socket.emit('playCard', { type:'Dash' });
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        return;
+      }
+      if (name === 'Blink'){
+        if (myEnergy() < (CARD_COST['Blink']||0)) { flashEnergyNotEnough(); return; }
+        if (turnState.usedMovement) return;
+        moveBuff.minSteps = Math.max(moveBuff.minSteps||0, 2);
+        socket.emit('playCard', { type:'Blink' });
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        return;
+      }
+      if (name === 'Scout'){
+        socket.emit('playCard', { type:'Scout' });
+        clearGhosts();
+        document.querySelectorAll('.token').forEach(t=>{
+          if (t.dataset.owner === playerRole) return;
+          const from = t.dataset.tile;
+          const hasMoved = t.dataset.hasMoved === "true";
+          const r = reachable(from, hasMoved ? 1 : 2, localWalls);
+          for (const tid of r) addGhost(tid, 'enemy');
+        });
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        return;
+      }
+
+      // Cards requiring target on board
+      if (name === 'Wall'){
+        if (myEnergy() < (CARD_COST['Wall']||0)) { flashEnergyNotEnough(); return; }
+        const open = Object.keys(tilePositions).filter(t=>!occupied(t) && !localWalls.has(t));
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        armedCardName = 'Wall';
+        socket.emit('revealCard', { type:'Wall' });
+        highlightSet(open, 'attack'); cardArmed = true; return;
+      }
+      if (name === 'Shatter'){
+        if (myEnergy() < (CARD_COST['Shatter']||0)) { flashEnergyNotEnough(); return; }
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        armedCardName = 'Shatter';
+        socket.emit('revealCard', { type:'Shatter' });
+        highlightSet([...localWalls], 'block'); cardArmed = true; return;
+      }
+      if (name === 'Teleport'){
+        if (turnState.usedMovement) return;
+        clearGhosts();
+        document.querySelectorAll('.token').forEach(t=>{
+          if (t.dataset.owner === playerRole) addGhost(t.dataset.tile, 'attack');
+        });
+        moveToDiscard(selectedCard);
+        playedCardThisTurn = true;
+        armedCardName = 'Teleport';
+        teleportSel = { active:false, source:null };
+        cardArmed = true; return;
+      }
+    }
+
+    const CARD_IMG = { 'Iron Skin': 'Iron_Skin.png', 'Sprint': 'Sprint.png' };
+
+// Map for character-ability images in /assets/Character Ability Cards
+const ABILITY_CARD_IMG = {
+  
+  
+  "Replenish":"Replenish.png","Blood Donation":"Blood_Donation.png","Transform":"Transform.png",
+  "Bear Claw":"Bear_Claw.png",
+  "Paw Swipe":"Paw_Swipe.png",
+  "1D6":"1D6.png",
+  "Skill Check":"Skill_Check.png",
+  // Canonical Death Blossom images
+  'Healing Blossom':'Healing_Blossom.png',
+  'Nectar of Life':'Nectar_Of_Life.png',
+  // Legacy aliases routed to the new art (display only)
+  'Healing Bloom':'Healing_Blossom.png',
+  'Mend':'Nectar_Of_Life.png',
+  'BlossomWall':'Healing_Blossom.png'
+,
+  "Sleight of Hand":"Sleight_Of_Hand.png",
+  "Swap":"Swap.png",
+  "Pin Cushion":"Pin_Cushion.png",
+  "Voodoo Doll":"Voodoo_Doll.png",
+  "True Shot":"True_Shot.png",
+  "FMJ":"FMJ.png",
+  "Reverse Polarity":"Reverse_Polarity.png",
+  "Polar Attraction":"Polar_Attraction.png"
+,
+  "Saving Throw":"Saving_Throw.png"
+};
+
+function cardImagePathFor(type){
+  // DM dice w/ Skill Check -> 1d6SC-2..7.png
+  if (/^1D6SC-[2-7]$/i.test(type)) {
+    const face = String(type).split('-')[1];
+    return `/assets/Character Ability Cards/1d6SC-${face}.png`;
+  }
+  // Normal DM dice -> 1d6-1..6.png
+  if (/^1D6-[1-6]$/i.test(type)) {
+    const face = String(type).split('-')[1];
+    return `/assets/Character Ability Cards/1d6-${face}.png`;
+  }
+  // Direct map (includes Saving Throw)
+  if (ABILITY_CARD_IMG[type]) {
+    return `/assets/Character Ability Cards/${ABILITY_CARD_IMG[type]}`;
+  }
+  const file = CARD_IMG[type] || (String(type).replace(/\s+/g, '_') + '.png');
+  return `/assets/Cards/${file}`;
+}
+
+
+function createCardEl(name, desc=''){
+  const c = document.createElement('div');
+  c.className = 'card imgcard';
+  c.dataset.card = name;
+  const fileName = (CARD_IMG[name] || (name.replace(/\s+/g, '_') + '.png'));
+  const img = document.createElement('img');
+  img.className = 'cardImg';
+  img.alt = name;
+  img.src = `/assets/Cards/${fileName}`;
+  c.appendChild(img);
+  c.onclick = (ev)=>{
+    ev.stopPropagation();
+    if (GAME_ENDED) return;
+    if (playerRole !== currentTurn) return;
+    if (turnState.cardPlayed && (!selectedCard || selectedCard !== c)) return;
+    if (selectedCard === c){
+      c.classList.remove('selected'); selectedCard=null; clearGhosts(); resetTeleport(); cardArmed=false;
+      document.body.classList.remove('has-selected');
+      hidePlayFloat();
+      return;
+    }
+    if (selectedCard){ selectedCard.classList.remove('selected'); }
+    c.classList.add('selected'); selectedCard = c; cardArmed=false;
+    document.body.classList.add('has-selected');
+    showPlayFloat(c);
+  };
+  return c;
+}
+playFloat.addEventListener('click', (ev)=>{
+      ev.stopPropagation();
+      if (!selectedCard) return;
+      playSelected();
+    });
+
+    function fillStartHand(){
+      hand.innerHTML = '';
+      for (let i=0;i<5;i++){
+        const spec = deck[deckIdx % deck.length]; deckIdx++;
+        hand.appendChild(createCardEl(spec.n, spec.d));
+      }
+      placeEndButton();
+    }
+    const MAX_HAND = 5;
+function handNonPlaceholderCount(){ return hand.querySelectorAll('.card:not(.placeholder)').length; }
+function handTotalSlots(){ return hand.querySelectorAll('.card').length; }
+function ensureHandSlots(){
+  let slots = handTotalSlots();
+  while (slots < MAX_HAND){ const ph = document.createElement('div'); ph.className='card placeholder'; hand.appendChild(ph); slots++; }
+}
+function insertIntoFirstPlaceholder(el){
+  ensureHandSlots();
+  if (handNonPlaceholderCount() >= MAX_HAND){ return; }
+  const ph = hand.querySelector('.card.placeholder');
+  if (ph) hand.replaceChild(el, ph);
+  else if (handNonPlaceholderCount() < MAX_HAND) hand.appendChild(el);
+  placeEndButton();
+}
+
+    function drawOneAtEnd(){
+  if (handNonPlaceholderCount() >= MAX_HAND) return;
+  const spec = deck[deckIdx % deck.length]; deckIdx++;
+  insertIntoFirstPlaceholder(createCardEl(spec.n, spec.d));
+}
+
+    function moveToDiscard(cardEl){
+      if (!cardEl) return;
+      cardEl.classList.remove('selected');
+      const ph = document.createElement('div');
+      ph.className = 'card placeholder';
+      hand.replaceChild(ph, cardEl);
+      selectedCard = null;
+      document.body.classList.remove('has-selected');
+      hidePlayFloat();
+      clearGhosts();
+      // draw replacement immediately
+      if (typeof drawOneAtEnd === 'function') { drawOneAtEnd(); }
+      placeEndButton();
+      }
+
+    function previewEnemyReach(){
+      clearGhosts();
+      document.querySelectorAll('.token').forEach(t=>{
+        if (t.dataset.owner === playerRole) return;
+        const from = t.dataset.tile;
+        const hasMoved = t.dataset.hasMoved === "true";
+        const r = reachable(from, hasMoved ? 1 : 2, localWalls);
+        for (const tid of r) addGhost(tid, 'enemy');
+      });
+    }
+
+    let teleportSel = { active:false, source:null };
+    function resetTeleport(){ teleportSel = { active:false, source:null }; }
+
+    board.addEventListener('mousedown', (e)=>{
+      if (!selectedCard || selectedCard.dataset.card !== 'Teleport' || !cardArmed) return;
+      if (myEnergy() < (CARD_COST['Teleport']||0)) { flashEnergyNotEnough(); return; }
+      const tok = e.target.closest('.token');
+      if (!tok) return;
+      if (tok.dataset.owner !== playerRole) return;
+      teleportSel = { active:true, source: tok.dataset.id };
+      const start = tok.dataset.tile;
+      highlightSet(reachable(start, 3, null), 'attack');
+      e.stopPropagation(); e.preventDefault();
+    }, true);
+
+    // End turn
+    endBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); if (GAME_ENDED) return; if (playerRole !== currentTurn) return; try { abilitySel = null; document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active')); document.querySelectorAll('.charCard').forEach(c=>c.style.outline=''); if (typeof clearGhosts==='function') clearGhosts(); } catch(_){} socket.emit('endTurn'); });
+
+    // Simple target flow: Fireball / Entangle / Iron Skin (Play → click unit)
+    board.addEventListener('mousedown', (e)=>{
+      if (!cardArmed || !simpleTarget) return;
+      const tok = e.target.closest('.token'); if (!tok) return;
+      const name = simpleTarget.card;
+      if (name === 'Fireball'){
+        if (myEnergy() < (CARD_COST['Fireball']||0)) { flashEnergyNotEnough(); return; }
+        if (tok.dataset.owner === playerRole) return; // enemy only
+        socket.emit('playCard', { type: 'Fireball', targetId: tok.dataset.id });
+      } else if (name === 'Entangle'){
+        if (myEnergy() < (CARD_COST['Entangle']||0)) { flashEnergyNotEnough(); return; }
+        if (tok.dataset.owner === playerRole) return; // enemy only
+        socket.emit('playCard', { type: 'Entangle', targetId: tok.dataset.id });
+      } else if (name === 'Iron Skin'){
+        if (myEnergy() < (CARD_COST['IronSkin']||0)) { flashEnergyNotEnough(); return; }
+        if (tok.dataset.owner !== playerRole) return; // ally only
+        socket.emit('playCard', { type: 'IronSkin', targetId: tok.dataset.id });
+      } else if (name === 'Cleanse'){
+        if (myEnergy() < (CARD_COST['Cleanse']||0)) { flashEnergyNotEnough(); return; }
+        socket.emit('playCard', { type: 'Cleanse', targetId: tok.dataset.id });
+      } else {
+        return;
+      }
+      // already discarded on Play; just finalize
+      simpleTarget = null; cardArmed = false;
+      label1.style.display = 'none';
+    });
+    
+
+    /* ---------- Name tags ---------- */
+    function updateNameTags(full){
+      if (!full || !full.playerNames) return;
+      const p1 = full.playerNames.player1 || 'Player 1';
+      const p2 = full.playerNames.player2 || 'Player 2';
+      if (playerRole === 'player2') {
+        label1.textContent = p2; // left shows "you" when you're P2
+        label2.textContent = p1;
+      } else {
+        label1.textContent = p1;
+        label2.textContent = p2;
+      }
+      label1.style.display = 'block';
+      label2.style.display = 'block';
+    }
+
+    /* ---------- HP cache so flashes work on resyncs & events ---------- */
+    const lastHp = new Map(); // id -> last known hp
+
+    function recordHpFromServerChars(serverChars){
+      for (const [id, cs] of Object.entries(serverChars)){
+        const meta = getMeta(cs.role, cs.name);
+        const hp = Math.max(0, Math.min(meta.maxHp, cs.hp ?? meta.maxHp));
+        lastHp.set(id, hp);
+      }
+    }
+
+    /* ---------- Sockets ---------- */
+    socket.on('assignRole', role=>{
+      playerRole = role;
+      fillStartHand();
+      placeEndButton();
+      setBanner();
+      refreshDraggables();
+      if (window.__lastFullState) updateNameTags(window.__lastFullState);
+    });
+
+    
+    function renderControlFromState(full){
+      try{
+        const box = document.getElementById('controlScoreBox');
+        const p1 = document.getElementById('p1Score');
+        const p2 = document.getElementById('p2Score');
+        const sp1 = document.getElementById('seriesP1');
+        const sp2 = document.getElementById('seriesP2');
+        let overlay = document.getElementById('controlOverlayLayer');
+        let flag = document.getElementById('controlFlag');
+        if (!full || full.mode !== 'control' || !full.control){
+          if (box) box.style.display = 'none';
+          if (flag) flag.style.display = 'none';
+          if (window.__controlOverlays){ window.__controlOverlays.forEach(el=>el.remove()); }
+          window.__controlOverlays = [];
+          return;
+        }
+        if (box) box.style.display = 'block';
+        if (playerRole === 'player2') {
+          if (p1) p1.textContent = String((full.control.progress?.player2 ?? full.control.tally?.player2 ?? 0));
+          if (p2) p2.textContent = String((full.control.progress?.player1 ?? full.control.tally?.player1 ?? 0));
+          if (sp1) sp1.textContent = String(full.control.scores?.player2 ?? 0);
+          if (sp2) sp2.textContent = String(full.control.scores?.player1 ?? 0);
+        } else {
+          if (p1) p1.textContent = String((full.control.progress?.player1 ?? full.control.tally?.player1 ?? 0));
+          if (p2) p2.textContent = String((full.control.progress?.player2 ?? full.control.tally?.player2 ?? 0));
+          if (sp1) sp1.textContent = String(full.control.scores?.player1 ?? 0);
+          if (sp2) sp2.textContent = String(full.control.scores?.player2 ?? 0);
+        }
+        if (window.__controlOverlays){ window.__controlOverlays.forEach(el=>el.remove()); }
+        window.__controlOverlays = [];
+        const tiles = full.control.tiles || [];
+        tiles.forEach(id=>{
+          const p = tilePositions[id]; if (!p) return;
+          const s = toScreen(p.x,p.y);
+          const el = document.createElement('div'); el.className='ghost control'; el.style.left=s.x+'px'; el.style.top=s.y+'px'; el.title=id;
+          overlay.appendChild(el); window.__controlOverlays.push(el);
+        });
+        const anc = full.control.anchor;
+        const pos = tilePositions[anc];
+        if (pos){
+          const s = toScreen(pos.x,pos.y);
+          flag.style.left = s.x+'px'; flag.style.top = s.y+'px'; flag.style.display='block';
+        }
+      }catch(e){/*noop*/}
+    }
+socket.on('fullState', full=>{ renderControlFromState(full);
+      window.__lastFullState = full;
+      updateNameTags(full);
+      positionEnergyBox();
+
+      const tokensState = full.tokens || {};
+      const serverChars = full.chars || {};
+
+      // Build list of flashes by comparing against lastHp (for both clients)
+      const toFlash = [];
+      for (const [id, cs] of Object.entries(serverChars)){
+        const meta = getMeta(cs.role, cs.name);
+        const nextHp = Math.max(0, Math.min(meta.maxHp, cs.hp ?? meta.maxHp));
+        const prevHp = lastHp.has(id) ? lastHp.get(id) : null;
+        if (prevHp !== null && prevHp !== nextHp){
+          toFlash.push({ id, kind: nextHp < prevHp ? 'dmg' : 'heal' });
+        }
+      }
+
+      // Update local character state
+      for (const [id, cs] of Object.entries(serverChars)){
+        initCharIfMissing(id, cs.role, cs.owner, cs.name);
+        const meta = getMeta(cs.role, cs.name);
+        charState.set(id, {
+          role: cs.role,
+          owner: cs.owner,
+          hp: Math.max(0, Math.min(meta.maxHp, cs.hp ?? meta.maxHp)),
+          maxHp: meta.maxHp,
+          cds: cs.cds ?? {special:0},
+          dead: !!cs.dead,
+          name: cs.name || id
+        });
+      }
+
+      // Update walls and tokens
+      localWalls.clear(); clearGhosts();
+      reconcileWallOverlays(full.blocked||[]);
+      (full.blocked||[]).forEach(w=> applyWallLocal(w.tile));
+      (full.blossomBlocked||[]).forEach(w=> { (w.owner===playerRole ? applyBlossomWallLocal : applyEnemyBlossomWallLocal)(w.tile); });
+      (full.blossomPinkBlocked||[]).forEach(w=> { (w.owner===playerRole ? applyBlossomPinkWallLocal : applyEnemyBlossomPinkWallLocal)(w.tile); });
+      spawnAllFromState(tokensState);
+
+      // [ENERGY] bar update
+      if (full.energy){ energyBySeat = full.energy; updateEnergyBar(full.energy[playerRole]||0, full.energyMax||10); }
+      // Rebuild panels and sync portraits
+      refreshPanelsFromChars(serverChars);
+      syncTokenPortraits();
+      // Re-apply active state for armed primary after panel rebuild
+      try {
+        if (window.abilitySel && abilitySel.kind === 'primary') {
+          const btn = document.querySelector(`.charCard[data-id="${abilitySel.sourceId}"] .primaryBtn`);
+          if (btn) btn.classList.add('active');
+        }
+      } catch(_){}
+    
+      applyRootLocks(full.locks || {});
+      applyStatusFX(full.fx || {});
+
+      // Play flashes after DOM exists
+      if (toFlash.length){
+        setTimeout(()=> toFlash.forEach(f=> flashCard(f.id, f.kind)), 0);
+      }
+
+      // Record new hp snapshot
+      recordHpFromServerChars(serverChars);
+
+      // Discards
+      if (full.lastDiscard){
+        setDiscardByWho('player1', full.lastDiscard.player1 || null);
+        setDiscardByWho('player2', full.lastDiscard.player2 || null);
+      }
+
+      // Turn + UI
+      currentTurn = full.currentTurn || currentTurn;
+      if (full.turn){
+        turnState = Object.assign({ usedMovement:false, usedAction:false, cardPlayed:false }, full.turn);
+      }
+      setBanner();
+      placeEndButton();
+
+      // re-place play float if selection exists
+      if (selectedCard) showPlayFloat(selectedCard);
+      refreshDraggables();
+    });
+
+    socket.on('nextTurn', who=>{
+      // Ensure client UI permits fresh move/action each turn
+      turnState = { usedMovement:false, usedAction:false, cardPlayed:false };
+      const wasMine = (playerRole !== who);
+      currentTurn = who; setBanner();
+
+      if (wasMine){ playedCardThisTurn = false; }
+
+      moveBuff = { stepsBonus:0, minSteps:0 };
+      clearGhosts(); resetTeleport();
+      if (selectedCard){ selectedCard.classList.remove('selected'); }
+      selectedCard=null; cardArmed=false;
+      document.body.classList.remove('has-selected');
+      hidePlayFloat();
+      document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+      pendingMoves.clear();
+      placeEndButton();
+    
+      // Disable own ability buttons when it's NOT our turn; enable on our turn
+      try {
+        const ally = document.getElementById('allyPanel');
+        if (ally){
+          const shouldDisable = (playerRole !== currentTurn) || GAME_ENDED;
+          ally.querySelectorAll('.cbtn').forEach(b=> b.disabled = shouldDisable);
+          // Also clear any armed primary visual if turn switched away
+          if (shouldDisable){
+            window.abilitySel = null;
+            ally.querySelectorAll('.primaryBtn').forEach(b=> b.classList.remove('active'));
+            document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+            clearGhosts();
+          }
+        }
+        const enemy = document.getElementById('enemyPanel');
+        if (enemy){ enemy.querySelectorAll('.cbtn').forEach(b=> b.disabled = true); }
+      } catch(_){}
+});
+
+    socket.on('move', ({ id, owner, toTile, capturedId })=>{
+      if (owner === playerRole && moveBuffOnce) { moveBuff.stepsBonus = 0; moveBuffOnce = false; } const token = document.querySelector(`.token[data-id="${id}"]`);
+      if (token){
+        token.dataset.tile = toTile;
+        token.dataset.hasMoved = "true";
+        const p = tilePositions[toTile];
+        const s = toScreen(p.x, p.y);
+        token.style.left = `${s.x}px`;
+        token.style.top  = `${s.y}px`;
+      }
+      if (capturedId){
+        const dead = document.querySelector(`.token[data-id="${capturedId}"]`);
+        if (dead) dead.remove();
+        if (charState.has(capturedId)){
+          const st = charState.get(capturedId); st.hp = 0; st.dead = true; updateHPBar(capturedId);
+          flashCard(capturedId, 'dmg');
+          lastHp.set(capturedId, 0);
+        }
+      }
+      pendingMoves.delete(id);
+    });
+
+    socket.on('invalidMove', ({ id })=>{
+      const token = document.querySelector(`.token[data-id="${id}"]`);
+      const prev = pendingMoves.get(id) || token?.dataset.tile;
+      if (token && prev){
+        const p = tilePositions[prev];
+        const s = toScreen(p.x, p.y);
+        token.style.left = `${s.x}px`;
+        token.style.top  = `${s.y}px`;
+      }
+      pendingMoves.delete(id);
+    });
+
+    socket.on('hpUpdate', ({ id, hp, prev, type }) => {
+      // Determine "before" HP reliably:
+      // Prefer the server-provided prev; otherwise use local charState or lastHp.
+      const beforeLocal =
+        (prev != null) ? prev :
+        (charState.get(id)?.hp ?? (lastHp.has(id) ? lastHp.get(id) : null));
+
+      if (!charState.has(id)) initCharIfMissing(id);
+
+      setHP(id, hp);
+      updateHPBar(id);
+
+      // Decide flash kind using server 'type' when available (most reliable)
+      if (beforeLocal !== null && beforeLocal !== hp) {
+        const kind = type || (hp < beforeLocal ? 'dmg' : 'heal');
+        flashCard(id, kind);
+      }
+
+      lastHp.set(id, hp);
+    });
+
+
+    socket.on('charState', ({ id, cds })=>{
+      if (!charState.has(id)) initCharIfMissing(id);
+      const cs = charState.get(id);
+      if (cds) cs.cds = cds;
+    });
+
+    socket.on('abilityUsed', ({ kind, sourceId, targetId, name })=>{
+  
+try {
+  const token = document.querySelector(`.token[data-id="${sourceId}"]`);
+  const who = token ? token.dataset.owner : 'player1';
+  if (name) setDiscardByWho(who, name);
+} catch(e){}
+if (name === 'Voodoo Doll'){
+    addOrUpdateStatusLocal(sourceId, 'redirect');
+  }
+
+  try {
+    if (window.abilitySel && abilitySel.kind === 'primary') {
+      const btn = document.querySelector(`.charCard[data-id="${abilitySel.sourceId}"] .primaryBtn`);
+      if (btn) btn.classList.add('active');
+    }
+  } catch(_){}
+});
+
+        socket.on('insufficientEnergy', ({ card, have, required })=>{ flashEnergyNotEnough(); });
+
+socket.on('cardRevealed', ({ who, type })=>{ setDiscardByWho(who, type); });
+
+    socket.on('cardPlayed', ({ type, tile, who, owner, stepsBonus, minSteps, targetId })=>{
+      if (who === playerRole){
+        if (type === 'Sprint') moveBuff.stepsBonus = stepsBonus ?? (moveBuff.stepsBonus||0)+1; moveBuffOnce = true;
+        if (type === 'Dash')     moveBuff.stepsBonus = stepsBonus ?? (moveBuff.stepsBonus||0)+2;
+        if (type === 'Blink')    moveBuff.minSteps   = Math.max(moveBuff.minSteps||0, minSteps ?? 2);
+      }
+      if (type === 'Scout') {
+        clearGhosts();
+        document.querySelectorAll('.token').forEach(t=>{
+          if (t.dataset.owner === playerRole) return;
+          const from = t.dataset.tile;
+          const hasMoved = t.dataset.hasMoved === "true";
+          const r = reachable(from, hasMoved ? 1 : 2, localWalls);
+          for (const tid of r) addGhost(tid, 'enemy');
+        
+      // Status cards quick UI update (server will reconcile on fullState)
+      if (targetId){
+        if (type === 'Fireball')  addOrUpdateStatusLocal(targetId, 'fireDot', 3);
+        if (type === 'IronSkin')  addOrUpdateStatusLocal(targetId, 'ironSkin', 2);
+        if (type === 'Entangle')  addOrUpdateStatusLocal(targetId, 'entangle', 2);
+      }
+
+    });
+      }
+      if (type === 'Wall' && tile) applyWallLocal(tile);
+      if (type === 'BlossomWall' && tile){ const me = (owner === playerRole); (me ? applyBlossomWallLocal : applyEnemyBlossomWallLocal)(tile); neighbors(tile).forEach(tid=> (me ? applyBlossomPinkWallLocal : applyEnemyBlossomPinkWallLocal)(tid)); }
+      if (type === 'Shatter' && tile) { if (!localBlossomWalls.has(tile)) removeWallLocal(tile); }
+      if (who) setDiscardByWho(who, type);
+    });
+
+    socket.on('unitDied', ({ id })=>{
+      const tok = document.querySelector(`.token[data-id="${id}"]`);
+      if (tok) tok.remove();
+      statusFX.delete(String(id));
+      renderStatusRow(String(id));
+      if (charState.has(id)){
+        const st = charState.get(id); st.hp = 0; st.dead = true; updateHPBar(id);
+        flashCard(id, 'dmg');
+        lastHp.set(id, 0);
+      }
+    });
+
+    socket.on('gameOver', ({ winner })=>{
+      GAME_ENDED = true;
+      banner.style.display = 'none';
+      gameover.style.display = 'flex';
+      wintext.textContent = 'Game Over';
+      winsub.textContent = `Winner: ${winner === 'player1' ? 'Player 1' : 'Player 2'}`;
+      document.querySelectorAll('button').forEach(b=> b.disabled = true);
+      playFloat.style.display = 'none';
+    });
+  </script>
+<script>
+/* === Entangle overlay toggler === */
+function updateEntangleOverlays(charsState){
+  try{
+    for (const [id, cs] of Object.entries(charsState||{})){
+      const el = document.querySelector(`.token[data-id="${id}"]`);
+      if (!el) continue;
+      const ent = !!(cs.fx && cs.fx.entangle && cs.fx.entangle.remaining > 0);
+      el.classList.toggle('entangled', ent);
+    }
+  }catch(e){ /* no-op */ }
+}
+
+</script>
+
+<script>
+// === Tile ring helper ===
+(function(){
+  const board = document.getElementById('board');
+  if (!board) return;
+
+  function tileOfToken(id){
+    const el = document.querySelector('.token[data-id="'+id+'"]');
+    return el ? el.dataset.tile : null;
+  }
+  function showTileRing(tileId){
+    const p = tilePositions[tileId];
+    if (!p) return;
+    const s = toScreen(p.x, p.y);
+    const ring = document.createElement('div');
+    ring.className = 'tileRing';
+    ring.style.left = s.x + 'px';
+    ring.style.top  = s.y + 'px';
+    board.appendChild(ring);
+    setTimeout(()=> ring.remove(), 1200);
+  }
+
+  board.addEventListener('click', (e)=>{
+    // Cancel Blossom special if clicking UI inside the board (buttons, cards, etc.)
+    if (window.abilitySel && window.abilitySel.kind === 'special'){
+      const uiHit = e.target.closest('#end-turn, .charCard, #hand, .cbtn, .primaryBtn, .specialBtn, .card, button');
+      if (uiHit && !e.target.closest('.token')){
+        window.abilitySel = null;
+        document.querySelectorAll('.primaryBtn').forEach(b=>b.classList.remove('active'));
+        document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+        if (typeof clearGhosts === 'function') clearGhosts();
+        return; // do not place
+      }
+    }
+    // Only when a special is selected AND it's a 'petal' type (Death Blossom)
+    try{
+      const sel = abilitySel; // global from main script
+      if (!sel || sel.kind !== 'special') return;
+
+      // derive meta for the selected source
+      const role = (getRoleState && sel.sourceId) ? (getRoleState(sel.sourceId) || guessRoleFromId(sel.sourceId)) : null;
+      const displayName = (charState.get(sel.sourceId)||{}).name;
+      const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : (role && ABIL_DEFS[role]));
+      const def = meta && meta.special;
+      if (!def || def.type !== 'petal') return;
+
+      // Only proceed if the click was on an actual tile element
+      const __tileHit = e.target.closest('#board .hex, #board .tile, #board [data-tile], #board [data-tid]');
+      if (!__tileHit) return;
+
+      // Snap to nearest tile under the click
+      const rect = board.getBoundingClientRect();
+      const logicalPt = toLogical(e.clientX - rect.left, e.clientY - rect.top);
+      const snap = nearestTile(logicalPt.x, logicalPt.y);
+
+      const startTile = tileOfToken(sel.sourceId);
+      const d = shortestDistanceWithWalls(startTile, snap.id, localWalls);
+      if (d === Infinity) return;
+      const rng = (def.range || sel.range || 99);
+      if (d > rng) return;
+
+      // Visual: green ring
+      showTileRing(snap.id);
+
+      // Spawn a wall using the exact Wall card path
+      if (typeof socket !== 'undefined'){
+        if (typeof myEnergy === 'function'){
+          const need = (CARD_COST['HealingPetal']||4);
+          if (myEnergy() < need){ flashEnergyNotEnough && flashEnergyNotEnough(); return; }
+        }
+        socket.emit('playCard', { type:'BlossomWall', tile: snap.id, origin:'blossom', sourceId: (abilitySel && abilitySel.sourceId) });
+      }
+      applyBlossomWallLocal(snap.id);
+
+      // Clear selection UI
+      abilitySel = null;
+      document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+      clearGhosts();
+    }catch(err){
+      console.warn('[tile ring] error', err);
+    }
+  }, true); // capture to run before other handlers if any
+
+// Global guard: if Blossom special is armed and click happens outside the board, cancel it.
+document.addEventListener('click', (ev)=>{
+  try{
+    if (!window.abilitySel || window.abilitySel.kind !== 'special') return;
+    const inBoard = ev.target.closest('#board');
+    const onToken = ev.target.closest('.token');
+    if (!inBoard && !onToken){
+      window.abilitySel = null;
+      document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+      if (typeof clearGhosts === 'function') clearGhosts();
+    }
+  }catch(_){}
+}, true);
+
+})();
+
+
+// --- Robust guard: cancel Blossom special on any non-tile click ---
+(function(){
+  function cancelBlossom() {
+    try{
+      if (window.abilitySel && window.abilitySel.kind === 'special'){
+        window.abilitySel = null;
+        document.querySelectorAll('.charCard').forEach(c=> c.style.outline='');
+        if (typeof clearGhosts === 'function') clearGhosts();
+      }
+    }catch(_){}
+  }
+  document.addEventListener('click', function(ev){
+    if (!(window.abilitySel && window.abilitySel.kind === 'special')) return;
+    const tileHit = ev.target.closest('#board .hex, #board .tile, #board [data-tile], #board [data-tid]');
+    if (tileHit) return; // allow placement on real tiles only
+    // Otherwise: cancel the special; also stop the board from seeing this click if it came from inside it.
+    const inBoard = !!ev.target.closest('#board');
+    cancelBlossom();
+    if (inBoard){
+      ev.stopImmediatePropagation();
+      ev.stopPropagation();
+    }
+  }, true); // capture so we run before board handlers
+})();
+
+</script>
+
+<script>
+/* === Texture Atlas (4x6 cells from a 1024x1536 image; one full cell per hex) === */
+(function(){
+  const ATLAS_SRC  = 'assets/stone_atlas.png';  // 1024×1536
+  const ATLAS_COLS = 4, ATLAS_ROWS = 6;
+
+  // Room-based deterministic seed
+  const params = new URLSearchParams(location.search);
+  const ROOMID = (typeof ROOM !== 'undefined' && ROOM) ? ROOM : (params.get('room') || 'default');
+  const SEED   = hashString(ROOMID + '@tex@v3');
+
+  function applyAtlas(){
+    const tiles = document.querySelectorAll('#board .tile');
+    tiles.forEach((tile, i) => {
+      const tw = tile.clientWidth  || parseInt(getComputedStyle(tile).width)  || 112;
+      const th = tile.clientHeight || parseInt(getComputedStyle(tile).height) || 108;
+      const bgW = tw * ATLAS_COLS;
+      const bgH = th * ATLAS_ROWS;
+      const pick = pickIndexFor(tile.dataset.id || String(i), SEED, ATLAS_COLS * ATLAS_ROWS);
+      const col  = pick % ATLAS_COLS;
+      const row  = Math.floor(pick / ATLAS_COLS);
+      tile.style.setProperty('--atlas-w', bgW + 'px');
+      tile.style.setProperty('--atlas-h', bgH + 'px');
+      tile.style.setProperty('--atlas-x', -(col * tw) + 'px');
+      tile.style.setProperty('--atlas-y', -(row * th) + 'px');
+      tile.style.backgroundImage = `url(${ATLAS_SRC})`;
+      tile.style.backgroundColor = 'transparent';
+      tile.style.backgroundOrigin = 'border-box';
+      tile.style.backgroundRepeat = 'no-repeat';
+    });
+  }
+
+  window.addEventListener('load', applyAtlas);
+  window.addEventListener('resize', () => requestAnimationFrame(applyAtlas));
+
+  function hashString(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;}
+  function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  function pickIndexFor(id, seed, total){const rnd=mulberry32((hashString(String(id))^seed)>>>0);return Math.floor(rnd()*total)%total;}
+})();
+</script>
+
+<script>
+/* DON_TAPHEAL_TOGGLE */
+(function(){
+  if (window.__DON_TAPHEAL__) return; window.__DON_TAPHEAL__ = true;
+  function wire(){
+    document.querySelectorAll('.charCard').forEach(card=>{
+      const nameEl = card.querySelector('.charName'); const name = nameEl ? nameEl.textContent.trim() : '';
+      if (name !== 'Don Atore') return;
+      const id = card.dataset.id; const btn = card.querySelector('.cbtn.primaryBtn'); if (!btn) return;
+      btn.addEventListener('mousedown', function(e){
+        try{
+          if (playerRole !== currentTurn || GAME_ENDED) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+          const role = getRoleState(id); const meta = getMeta(role, name);
+          if (!meta || !meta.primary || meta.primary.type !== 'tapHeal') return;
+          e.preventDefault(); e.stopImmediatePropagation();
+          const on = !(window.abilitySel && window.abilitySel.sourceId === id && window.abilitySel.kind === 'primary');
+          if (on){
+            window.abilitySel = { sourceId:id, range: meta.primary.range || 1, kind: 'primary' };
+            btn.classList.add('active');
+            try{
+              const tok = document.querySelector(`.token[data-id="${id}"]`);
+              const tile = tok ? tok.dataset.tile : null;
+              if (tile && typeof neighbors === 'function'){
+                const area = new Set([tile, ...neighbors(tile)]);
+                highlightSet(area, 'attack');
+              }
+            }catch(_){}
+          } else {
+            window.abilitySel = null;
+            btn.classList.remove('active');
+            try{ clearGhosts(); }catch(_){}
+          }
+        }catch(_){}
+      }, true);
+    });
+  }
+  // Wire on initial render and after any roster refresh
+  wire();
+  if (!window.__DON_TAPHEAL_OBS__){
+    window.__DON_TAPHEAL_OBS__ = new MutationObserver(()=> wire());
+    window.__DON_TAPHEAL_OBS__.observe(document.body, { childList:true, subtree:true });
+  }
+})();
+</script>
+
+  <script src="/js/geometry.js"></script>
+  <script src="/js/effects.js"></script>
+</body>
+</html>

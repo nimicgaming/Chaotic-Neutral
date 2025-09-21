@@ -1,0 +1,939 @@
+<!-- public/home.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chaotic Neutral — Home</title>
+  <style>
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#1b140f;color:#f7efe0;}
+    .wrap{max-width:960px;margin:40px auto;padding:0 16px;}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+    h1{margin:0;font-size:28px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .card{background:#2a2019;border:1px solid #ffffff1a;border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.35)}
+    .card h2{margin:0 0 12px;font-size:18px}
+    label{display:block;margin:8px 0 4px;font-weight:700}
+    input[type=text],select{width:100%;padding:10px;border-radius:8px;border:1px solid #ffffff2a;background:#3b2e24;color:#f7efe0}
+    .row{display:flex;gap:8px;align-items:center}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #7a5d12;background:#ffd772;color:#2a1b00;font-weight:900;cursor:pointer}
+    .muted{opacity:.85}
+    .log{margin-top:12px;font-size:13px;opacity:.9}
+    #toast{position:fixed;left:50%;top:20px;transform:translateX(-50%);background:#b33232;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,.4);display:none;z-index:50}
+    .code{font-family:ui-monospace,Menlo,Consolas,monospace;background:#1f1712;border:1px solid #ffffff1a;padding:6px 8px;border-radius:8px}
+  
+    /* Roster width fix */
+    .roster-card{max-width:960px;margin:16px auto;padding:0 16px;}
+  </style>
+  <link rel="stylesheet" href="/home.css" />
+</head>
+<body>
+  <div id="toast"></div>
+  <div class="wrap">
+    <header>
+      <h1>Chaotic Neutral</h1>
+      <button id="quickBtn">Quick Match</button>
+    
+      <div style="display:flex;gap:12px;align-items:center;">
+        <label for="mode" style="margin:0;font-weight:700;">Game Mode</label>
+        <select id="mode">
+          <option value="standard">Standard</option>
+          <option value="control">Control Points</option>
+        </select>
+      </div>
+</header>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Private Lobby</h2>
+
+        <label for="player">Your Name</label>
+        <input id="player" type="text" placeholder="e.g. Rowan" maxlength="18" />
+
+        <label for="room">Room Code</label>
+        <div class="row">
+          <input id="room" type="text" placeholder="e.g. party-123" />
+          <button id="hostBtn">Host</button>
+          <button id="joinBtn">Join</button>
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <div style="flex:1">
+            <label>Tank</label>
+            <select id="tank">
+  <option value="little_bear">Little Bear</option>
+  <option value="voodoo" selected>Voodoo</option>
+  <option value="loadstone">Loadstone</option>
+</select>
+          </div>
+          <div style="flex:1">
+            <label>DPS #1</label>
+            <select id="dps1">
+  <option value="aimbot" selected>Aimbot</option>
+  <option value="trickster">Trickster</option>
+  <option value="dungeon_master">Dungeon Master</option>
+</select>
+          </div>
+          <div style="flex:1">
+            <label>DPS #2</label>
+            <select id="dps2">
+  <option value="trickster" selected>Trickster</option>
+  <option value="aimbot">Aimbot</option>
+  <option value="dungeon_master">Dungeon Master</option>
+</select>
+          </div>
+          <div style="flex:1">
+            <label>Support</label>
+            <select id="support">
+  <option value="death_blossom" selected>Death Blossom</option>
+
+            <option value="don_atore">Don Atore</option></select>
+          </div>
+        </div>
+
+        <div class="log muted" id="log">Pick 1 Tank, 2 DPS (different by default), and 1 Support.</div>
+        <div class="log" id="wait" style="display:none">Waiting for another player to join room <span class="code" id="waitCode"></span>…</div>
+      </div>
+
+      <div class="card">
+        <h2>How to Play</h2>
+        <p class="muted">Move 1–2 hexes. Take one action (Primary/Special or a non-movement card). Play at most one card per turn. Walls last 8 turns. Defeat all enemy units to win.</p>
+      </div>
+    </div>
+  </div>
+
+
+    <section class="card roster-card">
+      <h2>Roster</h2>
+      <div id="rosterGroups"></div>
+    </section>
+    
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const modeEl = document.getElementById('mode');
+    const savedMode = sessionStorage.getItem('cn_mode') || localStorage.getItem('cn_mode') || 'standard';
+    if (modeEl) modeEl.value = savedMode;
+
+    const roomEl = document.getElementById('room');
+    const nameEl = document.getElementById('player');
+    const btnHost = document.getElementById('hostBtn');
+    const btnJoin = document.getElementById('joinBtn');
+    const btnQuick= document.getElementById('quickBtn');
+    const logEl   = document.getElementById('log');
+    const toastEl = document.getElementById('toast');
+    const waitEl  = document.getElementById('wait');
+    const waitCode= document.getElementById('waitCode');
+
+    function ensureDistinctDPS(){
+      const d1 = document.getElementById('dps1');
+      const d2 = document.getElementById('dps2');
+      if (d1.value === d2.value){
+        for (const opt of d2.options){
+          if (opt.value !== d1.value){ d2.value = opt.value; break; }
+        }
+      }
+    }
+    document.getElementById('dps1').addEventListener('change', ensureDistinctDPS);
+    document.getElementById('dps2').addEventListener('change', ensureDistinctDPS);
+
+    function heroesFromForm(){
+      ensureDistinctDPS();
+      const tank = document.getElementById('tank').value;
+      const dps1 = document.getElementById('dps1').value;
+      const dps2 = document.getElementById('dps2').value;
+      const sup  = document.getElementById('support').value;
+      return [tank, dps1, dps2, sup];
+    }
+    function showToast(msg){
+      toastEl.textContent = msg;
+      toastEl.style.display = 'block';
+      setTimeout(()=> toastEl.style.display = 'none', 2200);
+    }
+
+    function persist(name, room, heroes){
+      // prefer session for a single match; fall back to local as well
+      sessionStorage.setItem('cn_name', name);
+      sessionStorage.setItem('cn_room', room);
+      sessionStorage.setItem('cn_roster', JSON.stringify(heroes));
+      localStorage.setItem('cn_name', name);
+      localStorage.setItem('cn_room', room);
+      localStorage.setItem('cn_roster', JSON.stringify(heroes));
+    }
+
+    // Host: wait for guest; server will emit lobby:start for both
+    btnHost.addEventListener('click', ()=>{
+      const room = roomEl.value.trim();
+      const name = (nameEl.value.trim() || 'Player 1').slice(0,18);
+      if (!room){ showToast('Enter a room code.'); return; }
+      const heroes = heroesFromForm();
+      persist(name, room, heroes);
+      const mode = modeEl?.value || 'standard';
+      sessionStorage.setItem('cn_mode', mode); localStorage.setItem('cn_mode', mode);
+      socket.emit('lobby:host', { room, name, heroes, mode });
+    });
+
+    // Join: server will emit lobby:start once both present
+    btnJoin.addEventListener('click', ()=>{
+      const room = roomEl.value.trim();
+      const name = (nameEl.value.trim() || 'Player 2').slice(0,18);
+      if (!room){ showToast('Enter a room code.'); return; }
+      const heroes = heroesFromForm();
+      persist(name, room, heroes);
+      const mode = modeEl?.value || 'standard';
+      sessionStorage.setItem('cn_mode', mode); localStorage.setItem('cn_mode', mode);
+      socket.emit('lobby:join', { room, name, heroes, mode });
+    });
+
+    // Quick match: server pairs and emits match:found
+    btnQuick.addEventListener('click', ()=>{
+      const heroes = heroesFromForm();
+      const name = (nameEl.value.trim() || 'Player').slice(0,18);
+      persist(name, '', heroes);
+      const mode = modeEl?.value || 'standard';
+      sessionStorage.setItem('cn_mode', mode); localStorage.setItem('cn_mode', mode);
+      socket.emit('queue:quickmatch', { name, heroes, mode });
+      logEl.textContent = 'Searching for an opponent…';
+      btnQuick.disabled = true;
+    });
+
+    // Lobby events
+    socket.on('lobby:waiting', ({ room })=>{
+      waitCode.textContent = room;
+      waitEl.style.display = 'block';
+      showToast('Lobby created. Share the room code.');
+    });
+    socket.on('lobby:error', (m)=> showToast(m||'Lobby error'));
+    socket.on('lobby:notfound', ()=> showToast('Room not found'));
+    socket.on('room:full', ()=> showToast('Room is full.'));
+
+    // Start game (both flows: private lobby + quickmatch)
+    socket.on('lobby:start', ({ room, mode })=>{ const md = mode || (modeEl?.value || savedMode || 'standard'); sessionStorage.setItem('cn_mode', md); localStorage.setItem('cn_mode', md);
+      const heroes = JSON.parse(sessionStorage.getItem('cn_roster') || localStorage.getItem('cn_roster') || '[]');
+      const name = sessionStorage.getItem('cn_name') || localStorage.getItem('cn_name') || '';
+      sessionStorage.setItem('cn_room', room);
+      localStorage.setItem('cn_room', room);
+      // navigate
+      location.href = `/game?room=${encodeURIComponent(room)}&mode=${encodeURIComponent(sessionStorage.getItem('cn_mode')||'standard')}`;
+    });
+    socket.on('match:found', ({ room, mode })=>{ const md = mode || (modeEl?.value || savedMode || 'standard'); sessionStorage.setItem('cn_mode', md); localStorage.setItem('cn_mode', md);
+      sessionStorage.setItem('cn_room', room);
+      localStorage.setItem('cn_room', room);
+      location.href = `/game?room=${encodeURIComponent(room)}&mode=${encodeURIComponent(sessionStorage.getItem('cn_mode')||'standard')}`;
+    });
+  </script>
+
+<script>
+(function(){
+  function formatLine(abil){
+    if (!abil) return '';
+    const nm = abil.name || 'Ability';
+    const range = (abil.range!=null) ? ` (range ${abil.range})` : '';
+    const amt = (abil.dmg ?? abil.heal ?? abil.amount);
+    if (abil.type && String(abil.type).includes('heal')){
+      return `${nm}${amt!=null?`: ${amt} heal`:''}${range}`;
+    }
+    return `${nm}${amt!=null?`: ${amt} dmg`:''}${range}`;
+  }
+
+  function makeBox(card, char){
+    const name = (card.querySelector('.p-name')?.textContent || char?.name || '').trim();
+    const stats = [];
+    if (char && (char.hpMax!=null || char.energyMax!=null)){
+      if (char.hpMax!=null) stats.push(`HP: ${char.hpMax}`);
+      if (char.energyMax!=null) stats.push(`Energy: ${char.energyMax}`);
+    }
+    const prim = char?.primary;
+    const spec = char?.special;
+    const box = document.createElement('div');
+    box.className = 'p-hover';
+    box.innerHTML = `
+      <div class="ph-title">${name}</div>
+      ${stats.length ? `<div class="ph-sub">${stats.join(' · ')}</div>` : ''}
+      ${prim ? `<div class="ph-line"><b>Primary:</b> ${formatLine(prim)}</div>` : ''}
+      ${spec ? `<div class="ph-line"><b>Special:</b> ${formatLine(spec)}</div>` : ''}
+    `;
+    return box;
+  }
+
+  function buildMap(){
+    try{
+      const el = document.getElementById('charData');
+      if (!el) return null;
+      const arr = JSON.parse(el.textContent);
+      const map = new Map();
+      arr.forEach(c => map.set(c.name, c));
+      return map;
+    }catch(e){ return null; }
+  }
+
+  function apply(){
+    const map = buildMap();
+    document.querySelectorAll('.profile-card').forEach(card => {
+      if (card.querySelector('.p-hover')) return;
+      const nm = (card.querySelector('.p-name')?.textContent||'').trim();
+      const char = map ? map.get(nm) : null;
+      card.appendChild(makeBox(card, char));
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', apply);
+  const mo = new MutationObserver(apply);
+  mo.observe(document.body, { childList:true, subtree:true });
+})();
+</script>
+
+<script id="charData" type="application/json">[{"id": "trickster", "name": "Trickster", "class": "dps", "hpMax": 11, "energyMax": 6, "primary": {"name": "Swap", "type": "swap_positions", "cost": 4}, "special": {"name": "Trickster Special", "type": "none", "cost": 0}}, {"id": "aimbot", "name": "Aimbot", "class": "dps", "hpMax": 8, "energyMax": 6, "primary": {"name": "Headclicker", "type": "damage", "amount": 5, "range": 3}, "special": {"name": "FMJ", "type": "line_attack", "amount": 5, "range": 4, "cost": 3}}, {"id": "voodoo", "name": "Voodoo", "class": "tank", "hpMax": 18, "energyMax": 6, "primary": {"name": "Smash", "type": "damage", "amount": 4, "range": 1}, "special": {"name": "Voodoo Doll", "type": "redirect", "duration": 2, "cost": 3}}, {"id": "deathblossom", "name": "Death Blossom", "class": "support", "hpMax": 10, "energyMax": 6, "primary": {"name": "Seed of Life", "type": "heal", "amount": 2, "range": 2}, "special": {"name": "Healing Petal", "type": "aoe_heal", "amount": 3, "radius": 1, "cost": 3}}, {"id": "loadstone", "name": "Loadstone", "class": "tank", "hpMax": 15, "energyMax": 6, "primary": {"name": "Sonic Slam", "type": "aoe1", "amount": 2, "radius": 1}, "special": {"name": "Polar Attraction", "type": "polar", "range": 2, "cost": 4}}, {"id": "dungeon_master", "name": "Dungeon Master", "class": "support", "hpMax": 12, "energyMax": 6, "primary": {"name": "1D6", "type": "damage", "amount": 1, "range": 2}, "special": {"name": "Skill Check", "type": "buff", "range": 2, "cost": 3}}, {"id": "little_bear", "name": "Little Bear", "class": "tank", "hpMax": 13, "energyMax": 6, "primary": {"name": "Paw Swipe", "type": "damage", "amount": 3, "range": 1}, "special": {"name": "Transform", "type": "transform", "cost": 5, "duration": 3}}]</script>
+<script>
+function imagePathForName(name){
+      const map = {
+    "Dungeon Master": "assets/Character Images/Dungeon_Master.png",
+        "Voodoo": "assets/Character Images/Voodoo.png",
+        "Trickster": "assets/Character Images/Trickster.png",
+        "Aimbot": "assets/Character Images/Aimbot.png",
+        "Death Blossom": "assets/Character Images/Death_Blossom.png",
+        "Loadstone": "assets/Character Images/Loadstone.png",
+        "Little Bear": "assets/Character Images/Little_Bear.png"
+      };
+      return map[name] || null;
+    }
+const ABIL_OVERRIDES = {
+  "Little Bear": { emoji:"🐻", color:"#a36f3f", maxHp:13, primary:{ type:"damage", dmg:3, range:1, name:"Paw Swipe" }, special:{ name:"Transform", type:"transform", energyCost:5 } },
+  "Dungeon Master": {
+    emoji:'🎲', color:'#8e7cc3', maxHp:12,
+    primary:{ type:'damage', dmg:'1d6', range:2, name:'1D6' },
+    special:{ type:'buff', name:'Skill Check', range:2, energyCost:3 }
+  },
+      "Death Blossom": {
+        emoji:'🌸',
+        color:'#93c47d',
+        maxHp:10,
+        primary:{ type:'heal', heal:2, range:2, name:'Nectar of Life' },
+        special:{ type:'petal', heal:3, range:99, radius:1, name:'Healing Blossom', energyCost:4 }
+      },
+
+      Trickster: {
+        emoji:'🃏',
+        color:'#f1c232',
+        maxHp:11,
+        primary:{ type:'damage', dmg:4, range:1, name:'Sleight of Hand' },
+        special:{ type:'swap',   range:99, name:'Swap', energyCost:4 }
+      },
+      Voodoo: {
+        emoji:'🧿',
+        color:'#b56576',
+        // if maxHp not set, Tank base (18) is used
+        primary:{ type:'damage', dmg:4, range:1, name:'Pin Cushion' },
+        special:{ type:'redirect', name:'Voodoo Doll', energyCost:3, range:0, duration:2, autoSelf:true }
+      },
+      Aimbot: {
+        emoji:'🤖',
+        color:'#a3c4f3',
+        maxHp:8,
+        primary:{ type:'damage', dmg:5, range:3, name:'True Shot' },
+        special:{ type:'fmj',    range:4, name:'FMJ', energyCost:6 }
+      },
+      "Loadstone": {
+        emoji:'🧲',
+        color:'#6aa84f',
+        maxHp:15,
+        primary:{ type:'aoe',    dmg:2, range:1, name:'Reverse Polarity', autoSelf:true },
+        special:{ type:'polar',  range:2, name:'Polar Attraction', energyCost:4, autoSelf:true }
+      }
+      };
+    function getMeta(role, name){
+      const base = ABIL_DEFS[role] || ABIL_DEFS.Tank;
+      const ov = name && ABIL_OVERRIDES[name];
+      if (!ov) return base;
+      return {
+        ...base,
+        maxHp: ov.maxHp ?? base.maxHp,
+        primary: { ...(base.primary||{}), ...(ov.primary||{}) },
+        special: { ...(base.special||{}), ...(ov.special||{}) },
+        emoji: ov.emoji || base.emoji,
+        color: ov.color || base.color
+      };
+    }
+;
+
+    /* ---------- Character STATE ---------- */
+    const charState = new Map();
+    function initCharIfMissing(id, roleGuess, ownerGuess, nameGuess){
+      if (charState.has(id)) return;
+      const role = roleGuess || guessRoleFromId(id);
+      const def = getMeta(role, nameGuess);
+      charState.set(id, { role, owner: ownerGuess || null, hp:def.maxHp, maxHp:def.maxHp, cds:{ special:0 }, dead:false, name:nameGuess||id });
+    }
+    function setHP(id, hp){
+      if (!charState.has(id)) initCharIfMissing(id);
+      const s = charState.get(id);
+      s.hp = Math.max(0, Math.min(s.maxHp, hp));
+      s.dead = (s.hp <= 0);
+    }
+    function getRoleState(id){ initCharIfMissing(id); return charState.get(id).role; }
+
+    /* ---------- Tokens ---------- */
+    /* ---------- Status FX (UI only) ---------- */
+    const STATUS_EMOJI = { fireDot:'🔥', ironSkin:'🛡️', entangle:'🌿', redirect:'🧿' , skillCheck:'🎲', bear:'🐻' };
+    const STATUS_DEFAULT_TURNS = { fireDot:3, ironSkin:2, entangle:2, redirect:2 , skillCheck:1 };
+    const statusFX = new Map(); // id -> { fireDot:n, ironSkin:n, entangle:n }
+
+    function renderStatusRow(id){
+      const card = document.querySelector(`.charCard[data-id="${id}"]`);
+      if (!card) return;
+      const row = card.querySelector('.statusRow');
+      if (!row) return;
+      const fx = statusFX.get(id) || {};
+      const entries = Object.entries(fx).filter(([,v])=>v>0);
+      if (!entries.length){ row.innerHTML = ''; return; }
+      row.innerHTML = entries.map(([k,v]) => {
+        const emoji = STATUS_EMOJI[k] || '•';
+        return `<span class="statusPill" data-k="${k}"><span class="em">${emoji}</span><span class="num">${v}</span></span>`;
+      }).join('');
+    }
+    function applyStatusFX(fxMap){
+      statusFX.clear();
+      if (fxMap){
+        for (const [id, obj] of Object.entries(fxMap)){
+          statusFX.set(String(id), { ...obj });
+        }
+      }
+      document.querySelectorAll('.charCard').forEach(c=>{
+        renderStatusRow(c.dataset.id);
+      });
+    }
+    function addOrUpdateStatusLocal(id, kind, turns){
+      if (!id) return;
+      const cur = statusFX.get(String(id)) || {};
+      cur[kind] = Math.max(turns ?? STATUS_DEFAULT_TURNS[kind] ?? 1, cur[kind]||0);
+      statusFX.set(String(id), cur);
+      renderStatusRow(String(id));
+    }
+
+    function tokenPortraitFor(id){
+      const el = document.querySelector(`.charCard[data-id="${id}"] .charPortrait`);
+      return el ? el.textContent.trim() : '●';
+    }
+    function spawnToken(id, tileId, owner){
+      const p = tilePositions[tileId];
+      const s = toScreen(p.x,p.y);
+      const t = document.createElement('div');
+      t.className = 'token';
+      t.dataset.id = id;
+      t.dataset.owner = owner;
+      t.dataset.tile = tileId;
+      t.dataset.hasMoved = "false";
+      t.innerHTML = `<div class="portrait">${tokenPortraitFor(id)}</div>`;
+      t.style.left = `${s.x}px`;
+      t.style.top  = `${s.y}px`;
+      if (playerRole === owner && !GAME_ENDED) makeDraggable(t);
+      board.appendChild(t);
+      refreshDraggables();
+    }
+    function spawnAllFromState(tokensState){
+      const keep = new Set(Object.keys(tokensState));
+      document.querySelectorAll('.token').forEach(n=>{ if (!keep.has(n.dataset.id)) n.remove(); });
+      for (const [id, t] of Object.entries(tokensState)){
+        let el = document.querySelector(`.token[data-id="${id}"]`);
+        if (!el){
+          spawnToken(id, t.tile, t.owner);
+          el = document.querySelector(`.token[data-id="${id}"]`);
+        }else{
+          el.dataset.tile = t.tile;
+          const p = tilePositions[t.tile], s = toScreen(p.x,p.y);
+          el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
+        }
+      }
+      refreshDraggables();
+    }
+
+    const pendingMoves = new Map(); // id -> previous tile id
+
+    function makeDraggable(token){
+      token.addEventListener('mousedown', ()=>{
+        if (token.dataset.rooted === "true") return;
+        if (GAME_ENDED) return;
+        if (playerRole !== currentTurn) return;
+        if (token.dataset.owner !== playerRole) return;
+        if (turnState.usedMovement) return;
+
+        const hasMoved = token.dataset.hasMoved === "true";
+        const fxrow = (statusFX.get(String(token.dataset.id))||{});
+        const stepBonus = (currentTurn === token.dataset.owner) ? (fxrow.moveBonus||0) : 0;
+        let steps = (hasMoved ? 1 : 2) + (moveBuff.stepsBonus || 0) + stepBonus;
+
+        clearNonBlossomGhosts();
+        const from = token.dataset.tile;
+        const reach = reachable(from, steps, localWalls);
+        for (const tid of reach){
+          if (!occupied(tid, token) && !localWalls.has(tid)) addGhost(tid);
+        }
+
+        const startTile = token.dataset.tile;
+
+        const onMove = (ev)=>{
+          token.style.left = `${ev.pageX}px`;
+          token.style.top  = `${ev.pageY}px`;
+        };
+
+        const onUp = (ev)=>{
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          clearNonBlossomGhosts();
+
+          const rawX = ev.pageX - board.offsetLeft;
+          const rawY = ev.pageY - board.offsetTop;
+          const logicalPt = toLogical(rawX, rawY);
+          const snap = nearestTile(logicalPt.x, logicalPt.y);
+
+          
+          // Client-side guard: do not attempt to move onto a wall tile.
+          if (localWalls && localWalls.has(snap.id)) {
+            // snap back visually; server would reject anyway, but this avoids flicker
+            const prev = startTile;
+            const p = tilePositions[prev];
+            const sxy = toScreen(p.x, p.y);
+            token.style.left = `${sxy.x}px`;
+            token.style.top  = `${sxy.y}px`;
+            return;
+          }
+const hasMoved2 = token.dataset.hasMoved === "true";
+          let steps2 = (hasMoved2 ? 1 : 2) + (moveBuff.stepsBonus || 0);
+                    const d = shortestDistanceWithWalls(startTile, snap.id, localWalls);
+          // Let the server validate the move; if invalid, it will snap back via 'invalidMove'.
+pendingMoves.set(token.dataset.id, startTile);
+          socket.emit('requestMove', { id: token.dataset.id, owner: token.dataset.owner, toTile: snap.id });
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+    function refreshDraggables(){
+      document.querySelectorAll('.token').forEach(t=>{
+        if (!t.dataset.draggable &&
+            t.dataset.owner === playerRole &&
+            !GAME_ENDED && t.dataset.rooted !== "true") {
+          makeDraggable(t);
+          t.dataset.draggable = "1";
+        }
+      });
+    }
+
+    
+    /* ---------- Root locks (Entangle) ---------- */
+    function applyRootLocks(locks){
+      document.querySelectorAll('.token').forEach(t=>{
+        const id = t.dataset.id;
+        const rooted = !!(locks && locks[id] && locks[id].entangle);
+        if (rooted){
+          t.classList.add('rooted');
+          t.dataset.rooted = "true";
+        } else {
+          t.classList.remove('rooted');
+          if (t.dataset.rooted) delete t.dataset.rooted;
+        }
+      });
+      refreshDraggables();
+    }
+/* ---------- Character cards ---------- */
+    function buildCharCard(id, owner, role, dead=false, displayName){
+      initCharIfMissing(id, role, owner, displayName);
+      const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : (ABIL_DEFS[role]||ABIL_DEFS.Tank));
+      const st = charState.get(id);
+      const pct = Math.max(0, Math.min(100, Math.round(100 * st.hp / st.maxHp)));
+      const isAlly = owner === playerRole;
+
+      const descPrimary = `${meta.primary.name}: ${meta.primary.type==='heal' ? (meta.primary.heal+' heal') : (meta.primary.dmg+' dmg')} (range ${meta.primary.range})`;
+      
+      
+      // --- Special description (short custom text for certain abilities) ---
+      let descSpecial;
+      const sName = (meta.special && meta.special.name ? String(meta.special.name).toLowerCase() : '');
+
+      if (sName === 'transform') {
+        descSpecial = 'Transform: become a bear';
+      } else if (sName === 'voodoo doll') {
+        // No range text for redirect
+        descSpecial = 'Voodoo Doll: absorbs allies’ damage';
+      } else if (sName === 'swap') {
+        // No range text for swap
+        descSpecial = 'Swap: swap places';
+      } else if (sName === 'fmj') {
+        const r = (meta.special && meta.special.range != null) ? meta.special.range : 4;
+        descSpecial = `FMJ: piercing shot (range ${r})`;
+      } else if (meta.special.type === 'petal') {
+        const healAmt = (meta.special.heal ?? 3);
+        const r = (meta.special.radius ?? 1);
+        descSpecial = `${meta.special.name || 'Healing Blossom'}: heal ${healAmt} (r${r} AoE)`;
+      } else if (meta.special.type === 'swap' || meta.special.type === 'redirect') {
+        // Fallback for other swap/redirect variants
+        descSpecial = `${meta.special.name || 'Special'}: ability`;
+      } else if (meta.special.type === 'heal') {
+        descSpecial = `${meta.special.name || 'Special'}: ${meta.special.heal} heal (range ${meta.special.range || 1})`;
+      } else if (meta.special.type === 'damage') {
+        descSpecial = `${meta.special.name || 'Special'}: ${meta.special.dmg} dmg (range ${meta.special.range || 1})`;
+      } else {
+        const r = (meta.special.range != null ? meta.special.range : null);
+        descSpecial = `${meta.special.name || 'Special'}: ability${(r && r > 0) ? ` (range ${r})` : ''}`;
+      }
+
+      const wrap = document.createElement('div');
+
+      wrap.className = 'charCard' + (dead ? ' dead' : '');
+      wrap.dataset.id = id;
+      wrap.dataset.role = role;
+
+      const nameText = (displayName || id);
+
+      wrap.innerHTML = `
+        <div class="charName">${nameText} ${dead?'<span class="deadBadge">DEAD</span>':''}</div>
+        <div class="charPortrait" style="background:${meta.color}22;border:1px solid #0003">${(()=>{const p=imagePathForName(nameText); return p? `<span class=\"emojiBackup\" style=\"display:none\">${meta.emoji}</span><img class=\"charImg\" src=\"${p}\" alt=\"${nameText}\"/>` : `${meta.emoji}`;})()}</div>
+        <div class="charBody">
+          <div class="statLine onlyHp">
+            <span class="hpLine"><span class="hpIcon" aria-hidden="true">❤️</span> <b class="hp">${st.hp}</b>/<b class="hpmax">${st.maxHp}</b></span>
+          </div>
+          <div class="hpbar ${pct<=30?'danger':''}">
+            <div class="fill" style="width:${pct}%"></div>
+          </div>
+          <div class="statusRow" aria-label="statuses"></div>
+          <div class="desc">
+            <div class="descLine">${descPrimary}</div>
+            <div class="descLine">${descSpecial}</div>
+          </div>
+          <div class="btnRow">
+            <button class="cbtn primaryBtn">Primary</button>
+            <button class="cbtn specialBtn">Special</button>
+          </div>
+        </div>
+`;
+      // show cost if any
+      (function(){
+        const btn = wrap.querySelector('.specialBtn');
+        if (btn && meta && meta.special && meta.special.energyCost){ btn.textContent = `Special (${meta.special.energyCost}⚡)`; }
+      })();
+
+      if (!isAlly || dead || GAME_ENDED){
+        wrap.querySelectorAll('button').forEach(b=>b.disabled = true);
+      }else{
+        wrap.querySelector('.primaryBtn').onclick = (ev)=>{ ev.stopPropagation(); if (!turnState.usedAction) selectAbility('primary', id); };
+        wrap.querySelector('.specialBtn').onclick = (ev)=>{
+          ev.stopPropagation(); ev.preventDefault();
+          if (turnState.usedAction) return;
+          const role = getRoleState(id) || guessRoleFromId(id);
+          const displayName = (charState.get(id)||{}).name;
+          const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : ABIL_DEFS[role]);
+          const def = meta && meta.special;
+          if ((def && def.autoSelf === true) || (displayName === 'Loadstone' && kind === 'primary')) {
+            try {
+              socket.emit('useSpecial', { sourceId: id, targetId: id });
+              if (def.type === 'redirect'){
+                addOrUpdateStatusLocal(id, 'redirect', def.duration ?? 2);
+              }
+            } catch(e){ /* ignore */ }
+            // clear any selection/ghosts
+            abilitySel = null;
+            document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+            clearGhosts();
+            return;
+          }
+          // regular targeting flow
+          selectAbility('special', id);
+        };
+      }
+      return wrap;
+    }
+
+    function refreshPanelsFromChars(charsState){
+      allyPanel.innerHTML = '';
+      enemyPanel.innerHTML = '';
+
+      for (const [id, cs] of Object.entries(charsState)){
+        initCharIfMissing(id, cs.role, cs.owner, cs.name);
+        const local = charState.get(id);
+        local.owner = cs.owner;
+        local.role = cs.role;
+        local.maxHp = (typeof getMeta==='function' ? getMeta(cs.role, cs.name).maxHp : ABIL_DEFS[cs.role].maxHp);
+        local.hp = Math.max(0, Math.min(local.maxHp, cs.hp ?? local.hp));
+        local.cds = cs.cds ?? local.cds;
+        local.dead = !!cs.dead;
+        local.name = cs.name || id;
+
+        const card = buildCharCard(id, cs.owner, cs.role, local.dead, local.name);
+        if (cs.owner === playerRole) allyPanel.appendChild(card);
+        else enemyPanel.appendChild(card);
+      }
+    }
+
+    function guessRoleFromId(id){
+      if (id.includes('P1') || id.includes('E1')) return 'Tank';
+      if (id.includes('P2') || id.includes('E2')) return 'DPS1';
+      if (id.includes('P3') || id.includes('E3')) return 'DPS2';
+      return 'Support';
+    }
+    function syncTokenPortraits(){
+      document.querySelectorAll('.token').forEach(tok=>{
+        const id = tok.dataset.id;
+        const el = document.querySelector(`.charCard[data-id="${id}"] .charPortrait`);
+        if (el) tok.querySelector('.portrait').textContent = el.textContent.trim();
+      });
+    }
+    function updateHPBar(id){
+      const card = document.querySelector(`.charCard[data-id="${id}"]`);
+      if (!card) return;
+      const st = charState.get(id);
+      const pct = Math.max(0, Math.min(100, Math.round(100*st.hp/st.maxHp)));
+      const bar = card.querySelector('.hpbar');
+      const fill = card.querySelector('.hpbar .fill');
+      fill.style.width = pct + '%';
+      bar.classList.toggle('danger', pct<=30);
+      card.querySelector('.hp').textContent = st.hp;
+      card.querySelector('.hpmax').textContent = st.maxHp;
+
+      if (st.dead){
+        card.classList.add('dead');
+        const nameEl = card.querySelector('.charName');
+        if (nameEl && !nameEl.querySelector('.deadBadge')){
+          const b = document.createElement('span');
+          b.className = 'deadBadge';
+          b.textContent = 'DEAD';
+          nameEl.appendChild(b);
+        }
+        card.querySelectorAll('button').forEach(b=>b.disabled = true);
+      }
+    }
+
+    /* ---------- SIMPLE FLASH OVERLAY (1.25s, both screens) ---------- */
+    function flashCard(id, kind){
+      const card = document.querySelector(`.charCard[data-id="${id}"]`);
+      if (!card) return;
+      const overlay = document.createElement('div');
+      overlay.className = 'hitOverlay ' + (kind === 'heal' ? 'heal' : 'dmg');
+      card.appendChild(overlay);
+      setTimeout(()=>{ if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 1300);
+    }
+
+    /* ---------- Ability selection ---------- */
+    let abilitySel = null;
+
+    function selectAbility(kind, sourceId){
+      if (GAME_ENDED) return;
+      if (playerRole !== currentTurn) return;
+      if (turnState.usedAction) return;
+
+      const role = getRoleState(sourceId) || guessRoleFromId(sourceId);
+      const displayName = (charState.get(sourceId)||{}).name;
+      const meta = (typeof getMeta==='function' ? getMeta(role, displayName) : ABIL_DEFS[role]);
+      const def = (kind === 'primary') ? meta.primary : meta.special;
+      const range = def.range ?? 1;
+      
+      /* Auto‑self abilities (instant) */
+      if (def && (def.autoSelf === true || (displayName === 'Loadstone' && kind === 'primary'))) {
+        const evt = (kind === 'primary') ? 'usePrimary' : 'useSpecial';
+        socket.emit(evt, { sourceId, targetId: sourceId });
+        if (kind === 'special' && def.type === 'redirect'){
+          addOrUpdateStatusLocal(sourceId, 'redirect', def.duration ?? 2);
+        }
+        abilitySel = null;
+        document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+        clearGhosts();
+        return;
+      }
+
+
+      const exact = (displayName === 'Aimbot' && kind === 'primary');
+
+      
+      // Toggle off if pressing the same ability again
+      if (abilitySel && abilitySel.kind === kind && abilitySel.sourceId === sourceId){
+        abilitySel = null;
+        document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+        clearGhosts();
+        return;
+      }
+abilitySel = { kind, sourceId, range, exact };
+
+      document.querySelectorAll('.charCard').forEach(c=>c.style.outline='');
+      const sc = document.querySelector(`.charCard[data-id="${sourceId}"]`);
+      if (sc) sc.style.outline = '3px solid #ffd772';
+
+      const token = document.querySelector(`.token[data-id="${sourceId}"]`);
+      if (!token) return;
+      const start = token.dataset.tile;
+      let area = areaWithin(start, range, localWalls);
+      if (exact && range>0){
+        const inner = new Set(areaWithin(start, range-1, localWalls));
+        area = area.filter(t=>!inner.has(t));
+      }
+      // Do NOT show red overlay for Healing Blossom
+      const isPetalSpecial = (kind === 'special' && def && (def.type === 'petal' || (def.name||'').toLowerCase().includes('petal') || (def.name||'').toLowerCase().includes('blossom')));
+      if (!isPetalSpecial) { highlightSet(area, 'attack'); } else { clearAttackGhosts(); }
+
+    }
+
+    function tileOfToken(id){
+      const t = document.querySelector(`.token[data-id="${id}"]`);
+      return t ? t.dataset.tile : null;
+    }
+    function distanceTiles(a, b){
+      if (!a || !b) return Infinity;
+      if (a === b) return 0;
+      const seen = new Set([a]); const q = [[a,0]];
+      while(q.length){
+        const [cur, d] = q.shift();
+        for (const n of neighbors(cur)){
+          if (seen.has(n)) continue;
+          if (n === b) return d+1;
+          seen.add(n); q.push([n, d+1]);
+        }
+      }
+      return Infinity;
+    }
+
+    /* [ENERGY] Card costs (match server) */
+    function costOf(n){ try { return (CARD_COST[n] ?? CARD_COST[String(n).replace(/\s+/g,'')] ?? 0) | 0; } catch(e){ return 0; } }
+
+const CARD_COST = {
+  Cleanse: 3,
+  Siphon: 2,
+  Fireball: 4,
+  Entangle: 2,
+  IronSkin: 3,
+  Sprint: 2,
+  Wall: 1,
+  Shatter: 1,};
+
+    /* ---------- Discard UI helpers ---------- */
+    const CARD_DESC = {
+  Cleanse: 'Remove all status effects from a unit (any range)',
+  Siphon:  'Instant: pay 2, gain 1 energy; opponent loses 3',
+  Sprint:  'Gain 1 move',
+  Wall:   'Place a wall (8 turns)',
+  Shatter:'Remove a wall'
+}
+</script>
+
+
+<script>
+function cap(s){ return (s||'').charAt(0).toUpperCase() + (s||'').slice(1); }
+
+// === Single source of truth for the Home roster (names, roles, images, *string-only* lines) ===
+const DESC = {
+  "Little Bear": {
+    role: "tank",
+    img: "assets/Character Images/Little_Bear.png",
+    lines: [
+      "HP:13 MVMT:1-2 SEC:5 ",
+      "Paw Swipe: 3 dmg (r1).",
+      "Bear Claw: 5 dmg (r1).",
+      "Transform: Become a bear for 3 turns - movement +1, take 50% of incoming damage, use Bear Claw as primary."
+    ]
+  },
+  "Voodoo": {
+    role: "tank",
+    img: "assets/Character Images/Voodoo.png",
+    lines: [
+      "HP: 18 MVMT: 1 SEC: 3 ",
+      "Pin Cushion: 4 dmg (r1).",
+      "Voodoo Doll: redirect damage taken from teammates to self for 2 turns."
+    ]
+  },
+  "Loadstone": {
+    role: "tank",
+    img: "assets/Character Images/Loadstone.png",
+    lines: [
+      "HP: 15 MVMT: 1 SEC: 4 ",
+      "Reverse Polarity: 2 dmg to all enemies within 1 tile.",
+      "Polar Attraction — pull all enemies toward self who are within 2 tiles."
+    ]
+  },
+  "Aimbot": {
+    role: "dps",
+    img: "assets/Character Images/Aimbot.png",
+    lines: [
+      "HP: 8 MVMT: 1 SEC: 6 ",
+      "True Shot: 5 dmg (r3).",
+      "FMJ: A shot that hits all enemies in a straight line (r4)."
+    ]
+  },
+  "Trickster": {
+    role: "dps",
+    img: "assets/Character Images/Trickster.png",
+    lines: [
+      "HP: 11 MVMT: 2 SEC: 4 ",
+      "Sleight of Hand: 4 dmg (r1).",
+      "Swap: Swap positions with any other character on the board."
+    ]
+  },
+  "Dungeon Master": {
+    role: "dps",
+    img: "assets/Character Images/Dungeon_Master.png",
+    lines: [
+      "HP: 12 MVMT: 1 SEC: 3 ",
+      "1D6 — roll to deal 1–6 dmg (r2).",
+      "Skill Check: Grant +1 STR and +1 movement to any ally in range. The effect applies to their next turn.",
+      "Saving Throw: Upon death, 1 in 3 chance of passing Saving Throw check. Successful Saving Throws save Dungeon Master and restores 3 HP"
+    ]
+  },
+  "Death Blossom": {
+    role: "support",
+    img: "assets/Character Images/Death_Blossom.png",
+    lines: [
+      "HP: 10 MVMT: 2 SEC: 4 ",
+      "Nectar of Life: Heal 2 (r2).",
+      "Healing Blossom: Deploy a healing blossom whose pink petals heal for 1 hp and green center heals for 2 hp per turn. Heals last for 2 rounds and only applies to allies."
+    ]
+  },
+"Don Atore": {
+  role: "support",
+  img: "assets/Character Images/Don_Atore.png",
+  lines: [
+    "HP: 12  MVMT: 2  SEC: 4",
+    "Blood Donation: heal ally 1 within r1 (0 energy), Don loses same amount.",
+    "Replenish: self-heal 5 (cost 4).",
+    "Passive — Vital Flow: +2 HP at end of each round."
+  ]
+}
+};
+
+function renderRoster(){
+  const dst = document.getElementById('rosterGroups');
+  if (!dst) return;
+
+  // Build from DESC only
+  const groups = { Tanks:[], DPS:[], Support:[] };
+  for (const [name, info] of Object.entries(DESC)){
+    const role = String(info.role||'').toLowerCase();
+    const key = role==='tank' ? 'Tanks' : role==='support' ? 'Support' : 'DPS';
+    groups[key].push({ name, ...info });
+  }
+  for (const k of Object.keys(groups)) groups[k].sort((a,b)=> a.name.localeCompare(b.name));
+
+  function card(c){
+    const img = c.img || `assets/Character Images/${c.name.replaceAll(' ','_')}.png`;
+    const linesHTML = (c.lines||[]).map(t => `<div class="ph-line">${t}</div>`).join('');
+    return `
+      <div class="profile-card">
+        <div class="p-img"><img src="${img}" alt="${c.name}" onerror="this.onerror=null;this.src='assets/Character Images/${(c.name||'').replaceAll(' ','_')}.png';"/></div>
+        <div class="p-name">${c.name}</div>
+        <div class="p-role">${cap(c.role)}</div>
+        <div class="p-hover">
+          ${linesHTML}
+        </div>
+      </div>`;
+  }
+  function section(title, arr){
+    if (!arr.length) return '';
+    return `<h3 class="pg-h3">${title}</h3><div class="profile-grid">${arr.map(card).join('')}</div>`;
+  }
+  dst.innerHTML = section('Tanks', groups.Tanks) + section('DPS', groups.DPS) + section('Support', groups.Support);
+}
+
+document.addEventListener('DOMContentLoaded', renderRoster);
+</script>
+
+
+
+
+</body>
+</html>

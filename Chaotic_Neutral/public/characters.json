@@ -1,0 +1,161 @@
+[
+  {
+    "id": "trickster",
+    "name": "Trickster",
+    "class": "dps",
+    "hpMax": 11,
+    "energyMax": 6,
+    "primary": {
+      "name": "Swap",
+      "type": "swap_positions",
+      "cost": 4
+    },
+    "special": {
+      "name": "Trickster Special",
+      "type": "none",
+      "cost": 0
+    },
+    "movement": 2
+  },
+  {
+    "id": "aimbot",
+    "name": "Aimbot",
+    "class": "dps",
+    "hpMax": 8,
+    "energyMax": 6,
+    "primary": {
+      "name": "Headclicker",
+      "type": "damage",
+      "amount": 5,
+      "range": 3
+    },
+    "special": {
+      "name": "FMJ",
+      "type": "line_attack",
+      "amount": 5,
+      "range": 4,
+      "cost": 3
+    }
+  },
+  {
+    "id": "voodoo",
+    "name": "Voodoo",
+    "class": "tank",
+    "hpMax": 18,
+    "energyMax": 6,
+    "primary": {
+      "name": "Smash",
+      "type": "damage",
+      "amount": 4,
+      "range": 1
+    },
+    "special": {
+      "name": "Voodoo Doll",
+      "type": "redirect",
+      "duration": 2,
+      "cost": 3
+    }
+  },
+  {
+    "id": "death_blossom",
+    "name": "Death Blossom",
+    "class": "support",
+    "hpMax": 10,
+    "energyMax": 6,
+    "primary": {
+      "name": "Seed of Life",
+      "type": "heal",
+      "amount": 2,
+      "range": 2
+    },
+    "special": {
+      "name": "Healing Petal",
+      "type": "aoe_heal",
+      "amount": 3,
+      "radius": 1,
+      "cost": 3
+    }
+  },
+  {
+    "id": "loadstone",
+    "name": "Loadstone",
+    "class": "tank",
+    "hpMax": 15,
+    "energyMax": 6,
+    "primary": {
+      "name": "Sonic Slam",
+      "type": "aoe1",
+      "amount": 2,
+      "radius": 1
+    },
+    "special": {
+      "name": "Polar Attraction",
+      "type": "polar",
+      "range": 2,
+      "cost": 4
+    }
+  },
+  {
+    "id": "dungeon_master",
+    "name": "Dungeon Master",
+    "class": "dps",
+    "hpMax": 12,
+    "energyMax": 6,
+    "primary": {
+      "name": "1D6",
+      "type": "damage",
+      "amount": 1,
+      "range": 2
+    },
+    "special": {
+      "name": "Skill Check",
+      "type": "buff",
+      "range": 2,
+      "cost": 3
+    }
+  },
+  {
+    "id": "little_bear",
+    "name": "Little Bear",
+    "class": "tank",
+    "hpMax": 13,
+    "energyMax": 6,
+    "primary": {
+      "name": "Paw Swipe",
+      "type": "damage",
+      "amount": 3,
+      "range": 1
+    },
+    "special": {
+      "name": "Transform",
+      "type": "transform",
+      "cost": 5,
+      "duration": 3
+    }
+  },
+  {
+    "id": "don_atore",
+    "name": "Don Atore",
+    "class": "support",
+    "hpMax": 12,
+    "energyMax": 6,
+    "movement": 2,
+    "primary": {
+      "name": "Blood Donation",
+      "type": "heal",
+      "amount": 3,
+      "range": 1,
+      "cost": 0
+    },
+    "special": {
+      "name": "Replenish",
+      "type": "selfHeal",
+      "amount": 5,
+      "cost": 5
+    },
+    "passive": {
+      "name": "Vital Flow",
+      "desc": "Regenerate 2 HP at the end of each round."
+    }
+  }
+]
